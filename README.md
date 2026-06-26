@@ -375,12 +375,12 @@ body-part snippet is active as `caption`; `eval_compare_stream.py` sends both mo
 `caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to drive. Requires
 `pip install websockets` (already added to `environment.yml`).
 
-Note: Unity has no WebSocket *client* yet to receive these messages -- you'll need a small C# script
-(e.g. using the `SimpleJSON.cs` already in the project) that connects out to the python server and calls
-`SMPLModifyBones.updateBoneAngles` per `"frame"` message. Also, the HumanML3D-to-Unity coordinate
-conversion in `utils/unity_stream.py` (`motion_to_unity_pose`) is a best-effort default that hasn't been
-verified against a live Unity scene -- if the avatar ends up mirrored or rotated backwards, that's the
-one place to adjust.
+Note: `motion_to_unity_pose()` in `utils/unity_stream.py` sends HumanML3D's per-joint rotations straight
+through (only reordered into Unity's (x, y, z, w) quaternion layout) -- no RH/LH axis-mirroring, since
+this Unity rig is the SMPL team's own demo built to consume native SMPL joint rotations directly, and
+HumanML3D reparameterizes those same rotations (axis-angle -> 6D) without changing coordinate systems.
+An earlier version of this function did mirror one axis as a defensive guess; that turned out to produce
+anatomically-impossible results (legs crossing) and was removed.
 
 
 ## 8. Acknowledgement

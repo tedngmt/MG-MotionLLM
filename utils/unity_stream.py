@@ -88,16 +88,13 @@ def motion_to_unity_pose(raw_motion, joints_num):
     quats_wxyz[:, 0] = r_rot_quat.numpy()
     quats_wxyz[:, 1:joints_num] = body_quats
 
-    # HumanML3D is a right-handed Y-up system (X-right, Z-forward); Unity is left-handed
-    # Y-up. Converting RH->LH by mirroring the X axis: negate position X, and for the
-    # matching rotation quaternion negate the y/z (the two components NOT on the
-    # mirrored axis), keeping w and x. If the avatar ends up mirrored or rotated
-    # backwards in Unity, this is the one place to flip signs.
+    # No RH/LH axis-mirroring here: this Unity rig (assets/SMPL/...) is the SMPL team's
+    # own demo, built to consume native SMPL per-joint local rotations directly, and
+    # HumanML3D's rotations are reparameterized (axis-angle -> 6D) from SMPL's without
+    # any coordinate-system change. Mirroring on top of that produced anatomically
+    # impossible results (legs crossing) -- only reorder components for Unity's
+    # (x, y, z, w) quaternion layout.
     trans = r_pos.numpy().copy()
-    trans[:, 0] *= -1.0
-
-    quats_wxyz[..., 2] *= -1.0  # y
-    quats_wxyz[..., 3] *= -1.0  # z
     quats_xyzw = quats_wxyz[..., [1, 2, 3, 0]]
 
     return quats_xyzw, trans
