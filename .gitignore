@@ -10,6 +10,10 @@ glove/
 # Generated visualizations (eval_*_visualize.py --out_dir)
 visualizations/
 
+# Drop-in motions for the eval_*_visualize.py scripts to batch-process (keep the folder, ignore its contents)
+input/*
+!input/.gitkeep
+
 # Pretrained / fine-tuned model checkpoints, downloaded from HuggingFace or produced by
 # main_*.py (e.g. GSPretrained_base, m2t-ft-from-GSPretrained-base, t2m-ft-from-t5-base, ...)
 GSPretrained*/

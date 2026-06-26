@@ -1,15 +1,16 @@
-"""Standalone Motion-to-Text demo: caption a single motion clip and render it as a
+"""Standalone Motion-to-Text demo: caption motion clip(s) and render each as a
 3D skeleton animation (HumanML3D/SMPL-H body-joint topology) with the caption shown.
 
 This is a qualitative companion to eval_m2t.py, which computes corpus-wide
-BLEU/ROUGE/CIDEr/BERTScore over the whole test split. This script instead runs one
-motion through the VQ-VAE + motion-to-text model and visualizes the result, so it only
-needs torch/transformers/matplotlib (no GloVe vectorizer, evaluator wrapper, spacy, or
-bert-score).
+BLEU/ROUGE/CIDEr/BERTScore over the whole test split. This script instead runs motion
+through the VQ-VAE + motion-to-text model and visualizes the result, so it only needs
+torch/transformers/matplotlib (no GloVe vectorizer, evaluator wrapper, spacy, or bert-score).
 
 Examples:
     python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
-    python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --split test --seed 0
+    python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --split test --sample_seed 0
+    # process every .npy dropped into ./input/ (used when --name/--motion_path are both omitted)
+    python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
 """
 import os
 
@@ -21,8 +22,8 @@ from options import option
 from utils.motion_process import recover_from_ric
 from utils.plot_script import plot_3d_motion
 from utils.inference_utils import (
-    DATASET_CONFIG, resolve_sample, load_vqvae, motion_to_token_string, generate_text,
-    load_gt_caption,
+    DATASET_CONFIG, resolve_samples, load_vqvae, motion_to_token_string, generate_text,
+    load_gt_caption, sample_output_dir,
 )
 
 
@@ -35,55 +36,68 @@ if __name__ == '__main__':
     parser.add_argument('--motion_path', type=str, default=None,
                         help='Path to a raw HumanML3D-format motion .npy, used instead of a dataset sample')
     parser.add_argument('--split', type=str, default='test',
-                        help='Split to pick a random sample from when --name/--motion_path are not given')
+                        help='Split to pick a random sample from when --name/--motion_path are not given '
+                             'and ./input/ has no .npy files')
     parser.add_argument('--sample_seed', type=int, default=None, help='Seed for picking the random sample')
     parser.add_argument('--max_new_tokens', type=int, default=40)
     parser.add_argument('--out_dir', type=str, default='./visualizations')
-    parser.add_argument('--format', type=str, default='gif', choices=['gif', 'mp4'],
-                        help='mp4 requires a working ffmpeg install')
+    parser.add_argument('--format', type=str, default='mp4', choices=['gif', 'mp4'],
+                        help='mp4 requires a working ffmpeg install; use gif if ffmpeg is unavailable')
     parser.add_argument('--fps', type=float, default=None, help='Override playback fps (defaults to the dataset fps)')
     parser.add_argument('--radius', type=float, default=4.0, help='Floor footprint (meters) shown around the character')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args()
 
     cfg = DATASET_CONFIG[args.dataname]
-    os.makedirs(args.out_dir, exist_ok=True)
 
-    name, raw_motion = resolve_sample(cfg, args.split, args.name, args.motion_path, args.sample_seed)
-    print(f'[Sample] {name}  ({raw_motion.shape[0]} frames)')
+    samples = resolve_samples(cfg, args.split, args.name, args.motion_path, args.sample_seed)
+    print(f'[Found] {len(samples)} motion(s) to process')
 
-    # Truncate to a token-unit-length multiple, mirroring Motion2TextDataset.
     unit_length = 2 ** args.down_t
-    m_length = (raw_motion.shape[0] // unit_length) * unit_length
-    raw_motion = raw_motion[:m_length]
-
     mean = np.load(os.path.join(cfg['meta_dir'], 'mean.npy'))
     std = np.load(os.path.join(cfg['meta_dir'], 'std.npy'))
-    norm_motion = (raw_motion - mean) / std
 
     print('[VQ-VAE] loading...')
     net = load_vqvae(args, args.dataname, args.device)
-    motion_string = motion_to_token_string(net, norm_motion, args.device)
-    prompt = args.prompt + motion_string
 
     print('[LLM] loading', args.model_name)
     tokenizer = T5Tokenizer.from_pretrained(args.model_name)
     model = T5ForConditionalGeneration.from_pretrained(args.model_name).to(args.device).eval()
 
-    output_text = generate_text(tokenizer, model, prompt, args.max_new_tokens, args.device)
-    caption = output_text.strip().strip('"')
+    for name, raw_motion, is_dataset_sample in samples:
+        print(f'--- [Sample] {name}  ({raw_motion.shape[0]} frames) ---')
 
-    gt_caption = load_gt_caption(cfg, name)
+        # Truncate to a token-unit-length multiple, mirroring Motion2TextDataset.
+        m_length = (raw_motion.shape[0] // unit_length) * unit_length
+        raw_motion = raw_motion[:m_length]
+        norm_motion = (raw_motion - mean) / std
 
-    print(f'[GT caption]        {gt_caption}')
-    print(f'[Generated caption] {caption}')
+        motion_string = motion_to_token_string(net, norm_motion, args.device)
+        prompt = args.prompt + motion_string
 
-    joints = recover_from_ric(torch.from_numpy(raw_motion).float(), cfg['joints_num']).numpy()
+        output_text = generate_text(tokenizer, model, prompt, args.max_new_tokens, args.device)
+        caption = output_text.strip().strip('"')
 
-    title = f'Sample: {name}' + (f'\nGT: {gt_caption}' if gt_caption else '')
-    save_path = os.path.join(args.out_dir, f'{name}_m2t.{args.format}')
-    plot_3d_motion(save_path, cfg['kinematic_chain'], joints,
-                   captions=caption, title=title,
-                   fps=args.fps or cfg['fps'], radius=args.radius)
+        gt_caption = load_gt_caption(cfg, name) if is_dataset_sample else None
 
-    print(f'[Saved] {save_path}')
+        print(f'[GT caption]        {gt_caption}')
+        print(f'[Generated caption] {caption}')
+
+        joints = recover_from_ric(torch.from_numpy(raw_motion).float(), cfg['joints_num']).numpy()
+
+        sample_dir = sample_output_dir(args.out_dir, 'm2t', name)
+
+        title = f'Sample: {name}' + (f'\nGT: {gt_caption}' if gt_caption else '')
+        save_path = os.path.join(sample_dir, f'{name}.{args.format}')
+        plot_3d_motion(save_path, cfg['kinematic_chain'], joints,
+                       captions=caption, title=title,
+                       fps=args.fps or cfg['fps'], radius=args.radius)
+
+        text_path = os.path.join(sample_dir, f'{name}.txt')
+        with open(text_path, 'w', encoding='utf-8') as f:
+            f.write('Generated:\n' + caption + '\n')
+            if gt_caption:
+                f.write('\nGround truth:\n' + gt_caption + '\n')
+
+        print(f'[Saved] {save_path}')
+        print(f'[Saved] {text_path}')

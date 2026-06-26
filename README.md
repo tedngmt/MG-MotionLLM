@@ -292,7 +292,50 @@ We display some novel applications of our MG-MotionLLM.
   <img src="./assets/novel_apps.png" alt="novel_apps" align=center />
 </div>
 
+### Render a motion + caption (this repo)
+These three standalone scripts run one motion clip through the model and render it as a 3D skeleton
+animation (HumanML3D/SMPL-H body-joint topology) with the caption shown alongside it, for quick
+qualitative inspection. They only need torch/transformers/matplotlib (no GloVe vectorizer, evaluator
+wrapper, spacy, or bert-score), unlike `eval_m2t.py`/`eval_m2dt.py` which compute corpus-wide metrics.
 
+```python
+# Motion-to-Text: caption one motion clip
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
+
+# Motion-to-Detailed-Text: generate a fine-grained motion script, synced to the motion
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base --name 000000
+
+# Side-by-side: run both models on the same clip and compare them in one video
+CUDA_VISIBLE_DEVICES=0 python3 eval_compare_visualize.py \
+    --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base \
+    --name 000000
+```
+
+Drop `--name 000000` and `--motion_path` to batch-process every `.npy` you've placed under `./input/`
+instead (handy for motions extracted from elsewhere, e.g. a game-engine FBX export) -- and if `./input/`
+is empty too, a single random test-split sample is picked instead (add `--sample_seed N` to make that
+pick reproducible). Output defaults to MP4 (requires a working `ffmpeg`); pass `--format gif` if `ffmpeg`
+isn't available. Each clip gets its own folder: `./visualizations/{m2t,m2dt,compare}/{name}/{name}.{mp4,gif}`
+next to a `{name}.txt` with the generated (and ground-truth, where available) text.
+
+To try the `./input/` batch path without your own motion data yet, just copy a few files over from the
+dataset, e.g.:
+```python
+cp ./dataset/HumanML3D/new_joint_vecs/000000.npy ./dataset/HumanML3D/new_joint_vecs/000001.npy ./input/
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
+```
+
+These three scripts (and any custom motion you drop into `./input/`) always read from `new_joint_vecs/`
+rather than the `VQVAE/`/`VQVAE_start0/` folders used during training. `new_joint_vecs/` holds the raw,
+continuous joint-position motion -- the only form that can be turned back into a 3D skeleton, and from
+which motion tokens can be (re-)computed on the fly for any motion via the VQ-VAE encoder. `VQVAE/` and
+`VQVAE_start0/` instead hold token sequences *precomputed* by `scripts/tokenized_motion.py` and
+`scripts/tokenized_motion_start0.py` purely to speed up `main_m2t.py`/`main_m2dt.py` training -- they
+store integer code indices, not positions, so they can't drive a skeleton render, and they only exist for
+the dataset's own files, not for anything you drop into `./input/`.
+
+Note: HumanML3D motion only encodes the 22 SMPL body joints (no finger/hand rotations), so the
+rendered skeleton follows SMPL-H's body topology but hands render as simple end-effectors at the wrists.
 
 
 ## 8. Acknowledgement

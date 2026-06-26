@@ -33,24 +33,57 @@ DATASET_CONFIG = {
 }
 
 
-def resolve_sample(cfg, split, name=None, motion_path=None, seed=None):
-    """Pick the raw (unnormalized) HumanML3D-format motion to visualize.
+def sample_output_dir(out_dir, task, name):
+    """Per-sample output folder: <out_dir>/<task>/<name>/, created on demand."""
+    path = os.path.join(out_dir, task, name)
+    os.makedirs(path, exist_ok=True)
+    return path
 
-    Priority: an explicit --motion_path file, then an explicit --name dataset id,
-    then a random id from the requested split.
+
+INPUT_DIR = './input'
+
+
+def list_input_motions():
+    """Every .npy file under INPUT_DIR, sorted by name."""
+    if not os.path.isdir(INPUT_DIR):
+        return []
+    return sorted(
+        os.path.join(INPUT_DIR, f) for f in os.listdir(INPUT_DIR) if f.endswith('.npy')
+    )
+
+
+def resolve_samples(cfg, split, name=None, motion_path=None, seed=None):
+    """Pick the raw (unnormalized) HumanML3D-format motion(s) to visualize.
+
+    Returns a list of (sample_name, raw_motion, is_dataset_sample) tuples, where
+    `is_dataset_sample` tells callers whether it's safe to look up a ground-truth
+    caption for `sample_name` (only true for ids that actually came from the dataset).
+
+    Priority: an explicit --motion_path file, then an explicit --name dataset id, then
+    every .npy file under INPUT_DIR (drop your own motions there to batch-process them),
+    then -- if INPUT_DIR has nothing in it -- a single random id from the requested split.
     """
     if motion_path is not None:
         sample_name = os.path.splitext(os.path.basename(motion_path))[0]
-        return sample_name, np.load(motion_path)
+        return [(sample_name, np.load(motion_path), False)]
 
-    if name is None:
-        split_file = os.path.join(cfg['data_root'], f'{split}.txt')
-        with open(split_file) as f:
-            ids = [line.strip() for line in f if line.strip()]
-        name = random.Random(seed).choice(ids)
+    if name is not None:
+        raw_motion = np.load(os.path.join(cfg['motion_dir'], name + '.npy'))
+        return [(name, raw_motion, True)]
 
+    input_files = list_input_motions()
+    if input_files:
+        return [
+            (os.path.splitext(os.path.basename(path))[0], np.load(path), False)
+            for path in input_files
+        ]
+
+    split_file = os.path.join(cfg['data_root'], f'{split}.txt')
+    with open(split_file) as f:
+        ids = [line.strip() for line in f if line.strip()]
+    name = random.Random(seed).choice(ids)
     raw_motion = np.load(os.path.join(cfg['motion_dir'], name + '.npy'))
-    return name, raw_motion
+    return [(name, raw_motion, True)]
 
 
 def load_vqvae(args, dataname, device):
