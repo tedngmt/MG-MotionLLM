@@ -1,0 +1,27 @@
+# Datasets (downloaded separately, see README section 4)
+dataset/
+
+# VQ-VAE / evaluator checkpoints (see prepare/download_vqvae.sh, download_evaluators.sh)
+checkpoints/
+
+# GloVe word vectors (see prepare/download_glove.sh)
+glove/
+
+# Generated visualizations (eval_*_visualize.py --out_dir)
+visualizations/
+
+# Pretrained / fine-tuned model checkpoints, downloaded from HuggingFace or produced by
+# main_*.py (e.g. GSPretrained_base, m2t-ft-from-GSPretrained-base, t2m-ft-from-t5-base, ...)
+GSPretrained*/
+*-ft-from-*/
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# OS junk
+.DS_Store
+Thumbs.db
