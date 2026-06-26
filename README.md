@@ -337,6 +337,51 @@ the dataset's own files, not for anything you drop into `./input/`.
 Note: HumanML3D motion only encodes the 22 SMPL body joints (no finger/hand rotations), so the
 rendered skeleton follows SMPL-H's body topology but hands render as simple end-effectors at the wrists.
 
+### Stream a motion + caption to Unity live (this repo)
+Same idea as above, but instead of exporting an mp4/gif, these three scripts stream the SMPL pose and
+caption to Unity live over a WebSocket, frame by frame, in real time. They take the exact same
+`--name`/`--motion_path`/`--split`/`--sample_seed`/`./input/`-batch arguments as the visualize scripts
+above -- the only difference is the last step (broadcast over the network instead of rendering a file).
+
+```python
+# Motion-to-Text: stream one captioned motion clip
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_stream.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
+
+# Motion-to-Detailed-Text: stream one motion with its script, caption synced to the motion
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2dt_stream.py --model_name ./m2dt-ft-from-GSPretrained-base --name 000000
+
+# Side-by-side: stream one motion with both models' captions at once
+CUDA_VISIBLE_DEVICES=0 python3 eval_compare_stream.py \
+    --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base \
+    --name 000000
+```
+
+Each script is the WebSocket *server*: run it first, it loads the model(s) and then waits ("`[Server]
+listening on ws://0.0.0.0:8765 -- waiting for Unity to connect...`") until a Unity WebSocket client
+connects to `ws://<this machine>:--port` (default port `8765`; from Windows/Unity that's
+`ws://localhost:8765` thanks to WSL2's localhost forwarding). Only once connected does it start
+generating/streaming -- so it's safe to start the python side first and start Unity whenever you're ready.
+
+Per-frame JSON messages look like:
+```json
+{"type": "start", "name": "000000", "fps": 20.0, "num_frames": 116, "caption": "a person kicks with their left leg."}
+{"type": "frame", "frame": 0, "pose": [[x, y, z, w], "...24 entries..."], "trans": [x, y, z], "caption": "..."}
+{"type": "end", "name": "000000"}
+```
+`pose` is 24 local-rotation quaternions ordered to match `SMPLModifyBones._boneNameToJointIndex` (Pelvis=0
+.. R_Hand=23) in the Unity `smpl_mecanim` project -- feed it straight into
+`SMPLModifyBones.updateBoneAngles(pose, trans)` per frame. `eval_m2dt_stream.py` sends whichever
+body-part snippet is active as `caption`; `eval_compare_stream.py` sends both models' text as
+`caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to drive. Requires
+`pip install websockets` (already added to `environment.yml`).
+
+Note: Unity has no WebSocket *client* yet to receive these messages -- you'll need a small C# script
+(e.g. using the `SimpleJSON.cs` already in the project) that connects out to the python server and calls
+`SMPLModifyBones.updateBoneAngles` per `"frame"` message. Also, the HumanML3D-to-Unity coordinate
+conversion in `utils/unity_stream.py` (`motion_to_unity_pose`) is a best-effort default that hasn't been
+verified against a live Unity scene -- if the avatar ends up mirrored or rotated backwards, that's the
+one place to adjust.
+
 
 ## 8. Acknowledgement
 We appreciate helps from the following public code like 
