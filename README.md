@@ -334,6 +334,18 @@ which motion tokens can be (re-)computed on the fly for any motion via the VQ-VA
 store integer code indices, not positions, so they can't drive a skeleton render, and they only exist for
 the dataset's own files, not for anything you drop into `./input/`.
 
+```python
+# Motion-to-Text: caption one motion clip
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
+
+# Motion-to-Detailed-Text: generate a fine-grained motion script, synced to the motion
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base 
+
+# Side-by-side: run both models on the same clip and compare them in one video
+CUDA_VISIBLE_DEVICES=0 python3 eval_compare_visualize.py \
+    --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base
+```
+
 Note: HumanML3D motion only encodes the 22 SMPL body joints (no finger/hand rotations), so the
 rendered skeleton follows SMPL-H's body topology but hands render as simple end-effectors at the wrists.
 
@@ -356,11 +368,23 @@ CUDA_VISIBLE_DEVICES=0 python3 eval_compare_stream.py \
     --name 000000
 ```
 
+```python
+# Motion-to-Text: stream one captioned motion clip
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_stream.py --model_name ./m2t-ft-from-GSPretrained-base
+
+# Motion-to-Detailed-Text: stream one motion with its script, caption synced to the motion
+CUDA_VISIBLE_DEVICES=0 python3 eval_m2dt_stream.py --model_name ./m2dt-ft-from-GSPretrained-base
+
+# Side-by-side: stream one motion with both models' captions at once
+CUDA_VISIBLE_DEVICES=0 python3 eval_compare_stream.py \
+    --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base 
+```
+
 Each script is the WebSocket *server*: run it first, it loads the model(s) and then waits ("`[Server]
 listening on ws://0.0.0.0:8765 -- waiting for Unity to connect...`") until a Unity WebSocket client
 connects to `ws://<this machine>:--port` (default port `8765`; from Windows/Unity that's
 `ws://localhost:8765` thanks to WSL2's localhost forwarding). Only once connected does it start
-generating/streaming -- so it's safe to start the python side first and start Unity whenever you're ready.
+generating/streaming.
 
 Per-frame JSON messages look like:
 ```json
@@ -372,8 +396,7 @@ Per-frame JSON messages look like:
 .. R_Hand=23) in the Unity `smpl_mecanim` project -- feed it straight into
 `SMPLModifyBones.updateBoneAngles(pose, trans)` per frame. `eval_m2dt_stream.py` sends whichever
 body-part snippet is active as `caption`; `eval_compare_stream.py` sends both models' text as
-`caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to drive. Requires
-`pip install websockets` (already added to `environment.yml`).
+`caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to drive. 
 
 Note: `motion_to_unity_pose()` in `utils/unity_stream.py` sends HumanML3D's per-joint rotations straight
 through (only reordered into Unity's (x, y, z, w) quaternion layout) -- no RH/LH axis-mirroring, since
