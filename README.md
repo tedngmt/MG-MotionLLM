@@ -399,11 +399,9 @@ body-part snippet is active as `caption`; `eval_compare_stream.py` sends both mo
 `caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to drive. 
 
 Note: `motion_to_unity_pose()` in `utils/unity_stream.py` sends HumanML3D's per-joint rotations straight
-through (only reordered into Unity's (x, y, z, w) quaternion layout) -- no RH/LH axis-mirroring, since
-this Unity rig is the SMPL team's own demo built to consume native SMPL joint rotations directly, and
-HumanML3D reparameterizes those same rotations (axis-angle -> 6D) without changing coordinate systems.
-An earlier version of this function did mirror one axis as a defensive guess; that turned out to produce
-anatomically-impossible results (legs crossing) and was removed.
+through (only reordered into Unity's (x, y, z, w) quaternion layout) -- this Unity rig is the SMPL team's
+own demo built to consume native SMPL joint rotations directly, and HumanML3D reparameterizes those same
+rotations (axis-angle -> 6D) without changing coordinate systems.
 
 
 ## 8. Acknowledgement

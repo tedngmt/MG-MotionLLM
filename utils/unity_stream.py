@@ -88,12 +88,8 @@ def motion_to_unity_pose(raw_motion, joints_num):
     quats_wxyz[:, 0] = r_rot_quat.numpy()
     quats_wxyz[:, 1:joints_num] = body_quats
 
-    # No RH/LH axis-mirroring here: this Unity rig (assets/SMPL/...) is the SMPL team's
-    # own demo, built to consume native SMPL per-joint local rotations directly, and
-    # HumanML3D's rotations are reparameterized (axis-angle -> 6D) from SMPL's without
-    # any coordinate-system change. Mirroring on top of that produced anatomically
-    # impossible results (legs crossing) -- only reorder components for Unity's
-    # (x, y, z, w) quaternion layout.
+    # Per-joint rotations pass straight through (Unity's rig consumes native SMPL
+    # local rotations directly); only reorder components for Unity's (x, y, z, w).
     trans = r_pos.numpy().copy()
     quats_xyzw = quats_wxyz[..., [1, 2, 3, 0]]
 
