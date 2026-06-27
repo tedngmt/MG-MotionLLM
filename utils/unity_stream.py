@@ -88,10 +88,22 @@ def motion_to_unity_pose(raw_motion, joints_num):
     quats_wxyz[:, 0] = r_rot_quat.numpy()
     quats_wxyz[:, 1:joints_num] = body_quats
 
-    # Per-joint rotations pass straight through (Unity's rig consumes native SMPL
-    # local rotations directly); only reorder components for Unity's (x, y, z, w).
+    # HumanML3D/SMPL rotations are right-handed; Unity's Transform.localRotation is
+    # left-handed. A wxyz->xyzw reorder alone does NOT convert handedness -- feeding
+    # RH quaternions straight into a LH localRotation mirrors every joint and tips the
+    # whole body backward. Mirror the X axis to convert RH -> Unity LH. This is exactly
+    # the inverse of the conversion the rig itself documents in SMPLBlendshapes.cs
+    # (Quat_to_3x3Mat: Unity LH -> SMPL RH negates x and w); mirroring X is its own
+    # inverse, so the same negation maps SMPL RH -> Unity LH:
+    #     (w, x, y, z)_RH  ->  (x, y, z, w)_Unity = (-x, y, z, -w)
+    quats_xyzw = quats_wxyz[..., [1, 2, 3, 0]].copy()
+    quats_xyzw[..., 0] *= -1.0  # x
+    quats_xyzw[..., 3] *= -1.0  # w
+
+    # The pelvis translation lives in the same RH frame, so mirror its X component too;
+    # otherwise left/right motion (e.g. "lean right", "right leg forward") comes out swapped.
     trans = r_pos.numpy().copy()
-    quats_xyzw = quats_wxyz[..., [1, 2, 3, 0]]
+    trans[..., 0] *= -1.0
 
     return quats_xyzw, trans
 

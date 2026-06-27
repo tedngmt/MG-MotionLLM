@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(timeout 90 bash -c 'until grep -q '\\\\''listening'\\\\'' /tmp/claude-1000/-mnt-c-linux-mg-motionllm/855bd3d0-2f06-44ee-8c30-0cd72f57c620/scratchpad/rc.log 2>/dev/null; do sleep 2; done')"
+    ]
+  }
+}
