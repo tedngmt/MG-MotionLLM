@@ -300,13 +300,13 @@ wrapper, spacy, or bert-score), unlike `eval_m2t.py`/`eval_m2dt.py` which comput
 
 ```python
 # Motion-to-Text: caption one motion clip
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
+CUDA_VISIBLE_DEVICES=0 python3 m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
 
 # Motion-to-Detailed-Text: generate a fine-grained motion script, synced to the motion
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base --name 000000
+CUDA_VISIBLE_DEVICES=0 python3 m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base --name 000000
 
-# Side-by-side: run both models on the same clip and compare them in one video
-CUDA_VISIBLE_DEVICES=0 python3 eval_compare_visualize.py \
+# Both models on the same clip, side by side in one video
+CUDA_VISIBLE_DEVICES=0 python3 m2t_and_m2dt_visualize.py \
     --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base \
     --name 000000
 ```
@@ -315,14 +315,14 @@ Drop `--name 000000` and `--motion_path` to batch-process every `.npy` you've pl
 instead (handy for motions extracted from elsewhere, e.g. a game-engine FBX export) -- and if `./input/`
 is empty too, a single random test-split sample is picked instead (add `--sample_seed N` to make that
 pick reproducible). Output defaults to MP4 (requires a working `ffmpeg`); pass `--format gif` if `ffmpeg`
-isn't available. Each clip gets its own folder: `./visualizations/{m2t,m2dt,compare}/{name}/{name}.{mp4,gif}`
+isn't available. Each clip gets its own folder: `./visualizations/{m2t,m2dt,m2t_and_m2dt}/{name}/{name}.{mp4,gif}`
 next to a `{name}.txt` with the generated (and ground-truth, where available) text.
 
 To try the `./input/` batch path without your own motion data yet, just copy a few files over from the
 dataset, e.g.:
 ```python
 cp ./dataset/HumanML3D/new_joint_vecs/000000.npy ./dataset/HumanML3D/new_joint_vecs/000001.npy ./input/
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
+CUDA_VISIBLE_DEVICES=0 python3 m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
 ```
 
 These three scripts (and any custom motion you drop into `./input/`) always read from `new_joint_vecs/`
@@ -336,13 +336,13 @@ the dataset's own files, not for anything you drop into `./input/`.
 
 ```python
 # Motion-to-Text: caption one motion clip
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
+CUDA_VISIBLE_DEVICES=0 python3 m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
 
 # Motion-to-Detailed-Text: generate a fine-grained motion script, synced to the motion
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base 
+CUDA_VISIBLE_DEVICES=0 python3 m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base 
 
-# Side-by-side: run both models on the same clip and compare them in one video
-CUDA_VISIBLE_DEVICES=0 python3 eval_compare_visualize.py \
+# Both models on the same clip, side by side in one video
+CUDA_VISIBLE_DEVICES=0 python3 m2t_and_m2dt_visualize.py \
     --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base
 ```
 
@@ -356,29 +356,46 @@ caption to Unity live over a WebSocket, frame by frame, in real time. They take 
 above -- the only difference is the last step (broadcast over the network instead of rendering a file).
 
 ```python
-# Motion-to-Text: stream one captioned motion clip
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_stream.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
+# Motion-to-Text: stream one captioned motion clip (simple caption)
+CUDA_VISIBLE_DEVICES=0 python3 m2t_unity_stream.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
 
 # Motion-to-Detailed-Text: stream one motion with its script, caption synced to the motion
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2dt_stream.py --model_name ./m2dt-ft-from-GSPretrained-base --name 000000
+CUDA_VISIBLE_DEVICES=0 python3 m2dt_unity_stream.py --model_name ./m2dt-ft-from-GSPretrained-base --name 000000
 
-# Side-by-side: stream one motion with both models' captions at once
-CUDA_VISIBLE_DEVICES=0 python3 eval_compare_stream.py \
+# Both captions at once: stream one motion with the simple AND detailed caption on one avatar
+CUDA_VISIBLE_DEVICES=0 python3 m2t_and_m2dt_unity_stream.py \
     --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base \
     --name 000000
 ```
 
 ```python
-# Motion-to-Text: stream one captioned motion clip
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2t_stream.py --model_name ./m2t-ft-from-GSPretrained-base
+# Motion-to-Text: stream one captioned motion clip (simple caption)
+CUDA_VISIBLE_DEVICES=0 python3 m2t_unity_stream.py --model_name ./m2t-ft-from-GSPretrained-base
 
 # Motion-to-Detailed-Text: stream one motion with its script, caption synced to the motion
-CUDA_VISIBLE_DEVICES=0 python3 eval_m2dt_stream.py --model_name ./m2dt-ft-from-GSPretrained-base
+CUDA_VISIBLE_DEVICES=0 python3 m2dt_unity_stream.py --model_name ./m2dt-ft-from-GSPretrained-base
 
-# Side-by-side: stream one motion with both models' captions at once
-CUDA_VISIBLE_DEVICES=0 python3 eval_compare_stream.py \
+# Both captions at once: stream one motion with the simple AND detailed caption on one avatar
+CUDA_VISIBLE_DEVICES=0 python3 m2t_and_m2dt_unity_stream.py \
     --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base 
 ```
+
+**Playback speed.** All three scripts accept `--fps` and `--speed` to control how fast the motion
+plays back:
+- `--speed` is a multiplier on real-time playback (`0.5` = half speed / slow-mo, `2.0` = double). Use
+  this for "slower/faster" -- it's independent of the clip's native rate and keeps captions aligned.
+- `--fps` overrides the send frame rate (defaults to the dataset fps: 20 for t2m, 12.5 for kit).
+
+```python
+# Same clip at half speed (smooth slow-motion)
+CUDA_VISIBLE_DEVICES=0 python3 m2t_and_m2dt_unity_stream.py \
+    --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base \
+    --name 000000 --speed 0.5
+```
+The Unity client interpolates between received frames at its own render rate (toggle on the
+`MotionStreamClient` component), so playback stays smooth at any speed -- there's no need to raise
+`--fps` to match Unity's frame rate. Trailing static frames (the person standing still at the end of a
+clip) are auto-trimmed so the motion and captions finish together.
 
 Each script is the WebSocket *server*: run it first, it loads the model(s) and then waits ("`[Server]
 listening on ws://0.0.0.0:8765 -- waiting for Unity to connect...`") until a Unity WebSocket client
@@ -388,20 +405,24 @@ generating/streaming.
 
 Per-frame JSON messages look like:
 ```json
-{"type": "start", "name": "000000", "fps": 20.0, "num_frames": 116, "caption": "a person kicks with their left leg."}
-{"type": "frame", "frame": 0, "pose": [[x, y, z, w], "...24 entries..."], "trans": [x, y, z], "caption": "..."}
+{"type": "start", "name": "000000", "fps": 20.0, "num_frames": 79, "caption": "a person kicks with their left leg."}
+{"type": "frame", "frame": 0, "joints": [[x, y, z], "...22 entries..."], "caption": "..."}
 {"type": "end", "name": "000000"}
 ```
-`pose` is 24 local-rotation quaternions ordered to match `SMPLModifyBones._boneNameToJointIndex` (Pelvis=0
-.. R_Hand=23) in the Unity `smpl_mecanim` project -- feed it straight into
-`SMPLModifyBones.updateBoneAngles(pose, trans)` per frame. `eval_m2dt_stream.py` sends whichever
-body-part snippet is active as `caption`; `eval_compare_stream.py` sends both models' text as
-`caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to drive. 
+`joints` are 22 global joint *positions* (index 0 = pelvis) ordered to match
+`SMPLModifyBones._boneNameToJointIndex` (Pelvis=0 .. R_Wrist=21) in the Unity `smpl_mecanim` project --
+feed them straight into `SMPLModifyBones.updateBoneAnglesFromJoints(joints)` per frame. `m2dt_unity_stream.py`
+sends whichever body-part snippet is active as `caption`; `m2t_and_m2dt_unity_stream.py` sends both models'
+text as `caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to drive. The Unity
+overlay shows a single `caption` unlabeled, or both captions labeled `Simple:` (M2T) / `Detail:` (M2DT)
+when both are present.
 
-Note: `motion_to_unity_pose()` in `utils/unity_stream.py` sends HumanML3D's per-joint rotations straight
-through (only reordered into Unity's (x, y, z, w) quaternion layout) -- this Unity rig is the SMPL team's
-own demo built to consume native SMPL joint rotations directly, and HumanML3D reparameterizes those same
-rotations (axis-angle -> 6D) without changing coordinate systems.
+Note: `motion_to_unity_joints()` in `utils/unity_stream.py` streams joint **positions**
+(`recover_from_ric`, X-mirrored into Unity's left-handed frame), not rotations. HumanML3D/T2M's per-joint
+cont6d rotations use a different forward-kinematics convention than Unity's `Transform.localRotation`
+(the bone offset is rotated by the *child's* accumulated global rotation, not the parent's), so they
+cannot be applied to bones directly. Positions are convention-free, and the Unity side rebuilds each
+bone's rotation by aiming it at its child joint (see `SMPLModifyBones.updateBoneAnglesFromJoints`).
 
 
 ## 8. Acknowledgement

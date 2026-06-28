@@ -4,12 +4,12 @@ animation per clip with two panels -- the M2T caption on the left, the time-sync
 M2DT script on the right -- so you can compare what each model says about the same motion.
 
 Examples:
-    python3 eval_compare_visualize.py \\
+    python3 m2t_and_m2dt_visualize.py \\
         --m2t_model_name ./m2t-ft-from-GSPretrained-base \\
         --m2dt_model_name ./m2dt-ft-from-GSPretrained-base \\
         --name 000000
     # process every .npy dropped into ./input/ (used when --name/--motion_path are both omitted)
-    python3 eval_compare_visualize.py \\
+    python3 m2t_and_m2dt_visualize.py \\
         --m2t_model_name ./m2t-ft-from-GSPretrained-base --m2dt_model_name ./m2dt-ft-from-GSPretrained-base
 """
 import os
@@ -115,7 +115,7 @@ if __name__ == '__main__':
 
         joints = recover_from_ric(torch.from_numpy(raw_motion).float(), cfg['joints_num']).numpy()
 
-        sample_dir = sample_output_dir(args.out_dir, 'compare', name)
+        sample_dir = sample_output_dir(args.out_dir, 'm2t_and_m2dt', name)
 
         save_path = os.path.join(sample_dir, f'{name}.{args.format}')
         plot_3d_motion_compare(save_path, cfg['kinematic_chain'], joints,

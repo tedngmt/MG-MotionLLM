@@ -1,6 +1,14 @@
-"""Convert HumanML3D motion vectors to SMPL joint-rotation quaternions for live
-streaming to the Unity SMPL avatar (C:\\Linux\\smpl_mecanim, SMPLModifyBones.updateBoneAngles),
+"""Convert HumanML3D motion vectors to global SMPL joint POSITIONS for live streaming
+to the Unity SMPL avatar (C:\\Linux\\smpl_mecanim, SMPLModifyBones.updateBoneAnglesFromJoints),
 plus a minimal WebSocket server to push them there frame by frame.
+
+Why positions, not rotations: HumanML3D/T2M's per-joint cont6d rotations use a different
+forward-kinematics convention than Unity's Transform.localRotation -- T2M rotates a bone's
+offset by the *child's* accumulated global rotation, Unity by the *parent's* -- so feeding
+them to bones is mathematically incompatible (verified: correct only when all rotations are
+near-identity, i.e. the rest pose, and diverging badly otherwise). Global joint positions
+are convention-free; recover_from_ric reproduces the reference visualization exactly, and
+Unity rebuilds bone rotations from the positions by aiming each bone at its child joint.
 """
 import asyncio
 import json
@@ -9,110 +17,74 @@ import numpy as np
 import torch
 import websockets
 
-from utils.motion_process import recover_root_rot_pos
-from utils.quaternion import cont6d_to_matrix
+from utils.motion_process import recover_from_ric
 
 
-# Matches SMPLModifyBones._boneNameToJointIndex exactly (24 SMPL body joints).
-# HumanML3D only covers indices 0-21 (Pelvis..R_Wrist); L_Hand/R_Hand (22, 23) are
-# always sent as the identity quaternion since this motion representation has no
-# finger/hand joints.
+# Matches SMPLModifyBones._boneNameToJointIndex (Pelvis=0 .. R_Wrist=21). HumanML3D's
+# t2m representation covers exactly these 22 joints; the rig's L_Hand/R_Hand (22, 23) have
+# no data here and Unity simply leaves them at their bind pose.
 UNITY_JOINT_NAMES = [
     'Pelvis', 'L_Hip', 'R_Hip', 'Spine1', 'L_Knee', 'R_Knee', 'Spine2', 'L_Ankle', 'R_Ankle',
     'Spine3', 'L_Foot', 'R_Foot', 'Neck', 'L_Collar', 'R_Collar', 'Head', 'L_Shoulder', 'R_Shoulder',
-    'L_Elbow', 'R_Elbow', 'L_Wrist', 'R_Wrist', 'L_Hand', 'R_Hand',
+    'L_Elbow', 'R_Elbow', 'L_Wrist', 'R_Wrist',
 ]
 NUM_UNITY_JOINTS = len(UNITY_JOINT_NAMES)
 
 
-def matrix_to_quaternion_np(mats):
-    """(N, 3, 3) rotation matrices -> (N, 4) quaternions as (w, x, y, z), Shepperd's method."""
-    out = np.zeros((mats.shape[0], 4), dtype=np.float64)
-    for idx in range(mats.shape[0]):
-        m = mats[idx]
-        trace = m[0, 0] + m[1, 1] + m[2, 2]
-        if trace > 0:
-            s = 0.5 / np.sqrt(trace + 1.0)
-            w = 0.25 / s
-            x = (m[2, 1] - m[1, 2]) * s
-            y = (m[0, 2] - m[2, 0]) * s
-            z = (m[1, 0] - m[0, 1]) * s
-        elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
-            s = 2.0 * np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
-            w = (m[2, 1] - m[1, 2]) / s
-            x = 0.25 * s
-            y = (m[0, 1] + m[1, 0]) / s
-            z = (m[0, 2] + m[2, 0]) / s
-        elif m[1, 1] > m[2, 2]:
-            s = 2.0 * np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2])
-            w = (m[0, 2] - m[2, 0]) / s
-            x = (m[0, 1] + m[1, 0]) / s
-            y = 0.25 * s
-            z = (m[1, 2] + m[2, 1]) / s
-        else:
-            s = 2.0 * np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
-            w = (m[1, 0] - m[0, 1]) / s
-            x = (m[0, 2] + m[2, 0]) / s
-            y = (m[1, 2] + m[2, 1]) / s
-            z = 0.25 * s
-        out[idx] = [w, x, y, z]
-    return out
-
-
-def motion_to_unity_pose(raw_motion, joints_num):
-    """Decode per-joint local rotations directly from the raw HumanML3D motion vector
-    (no forward kinematics needed -- these 6D values are already each joint's
-    parent-relative rotation, exactly what Mecanim's `Transform.localRotation` wants).
+def motion_to_unity_joints(raw_motion, joints_num):
+    """Recover global joint positions from the raw HumanML3D motion vector and convert
+    them to Unity's left-handed coordinate frame.
 
     Args:
         raw_motion: (T, D) raw (unnormalized) HumanML3D motion vector.
-        joints_num: 22 for t2m -- only Pelvis..R_Wrist (indices 0-21) are present.
+        joints_num: 22 for t2m -- Pelvis..R_Wrist (indices 0-21).
 
     Returns:
-        quats_xyzw: (T, 24, 4) Unity-space local rotation quaternions, (x, y, z, w),
-            ordered to match UNITY_JOINT_NAMES / SMPLModifyBones._boneNameToJointIndex.
-        trans: (T, 3) Unity-space pelvis position.
+        joints_xyz: (T, joints_num, 3) joint positions in Unity space, ordered to match
+            UNITY_JOINT_NAMES / SMPLModifyBones._boneNameToJointIndex. Index 0 is the pelvis.
     """
     data = torch.from_numpy(raw_motion).float()
-    num_frames = data.shape[0]
-    r_rot_quat, r_pos = recover_root_rot_pos(data)  # (T, 4) w,x,y,z ; (T, 3)
+    joints = recover_from_ric(data, joints_num).numpy()  # (T, joints_num, 3), HumanML3D Y-up, RH
 
-    start_indx = 4 + (joints_num - 1) * 3
-    end_indx = start_indx + (joints_num - 1) * 6
-    cont6d_params = data[..., start_indx:end_indx].reshape(num_frames, joints_num - 1, 6)
-    body_mats = cont6d_to_matrix(cont6d_params).numpy().reshape(-1, 3, 3)
-    body_quats = matrix_to_quaternion_np(body_mats).reshape(num_frames, joints_num - 1, 4)
+    # HumanML3D is right-handed Y-up, Unity is left-handed Y-up: mirror X to convert.
+    # Y (up) and Z map straight across, so this preserves the motion's own heading.
+    joints = joints.copy()
+    joints[..., 0] *= -1.0
+    return joints
 
-    quats_wxyz = np.zeros((num_frames, NUM_UNITY_JOINTS, 4), dtype=np.float64)
-    quats_wxyz[..., 0] = 1.0  # identity (w=1) default, covers L_Hand/R_Hand
-    quats_wxyz[:, 0] = r_rot_quat.numpy()
-    quats_wxyz[:, 1:joints_num] = body_quats
 
-    # HumanML3D/SMPL rotations are right-handed; Unity's Transform.localRotation is
-    # left-handed. A wxyz->xyzw reorder alone does NOT convert handedness -- feeding
-    # RH quaternions straight into a LH localRotation mirrors every joint and tips the
-    # whole body backward. Mirror the X axis to convert RH -> Unity LH. This is exactly
-    # the inverse of the conversion the rig itself documents in SMPLBlendshapes.cs
-    # (Quat_to_3x3Mat: Unity LH -> SMPL RH negates x and w); mirroring X is its own
-    # inverse, so the same negation maps SMPL RH -> Unity LH:
-    #     (w, x, y, z)_RH  ->  (x, y, z, w)_Unity = (-x, y, z, -w)
-    quats_xyzw = quats_wxyz[..., [1, 2, 3, 0]].copy()
-    quats_xyzw[..., 0] *= -1.0  # x
-    quats_xyzw[..., 3] *= -1.0  # w
+def active_length(joints, move_thresh=0.05, pad=4):
+    """Number of leading frames up to (and a few past) the end of meaningful motion.
 
-    # The pelvis translation lives in the same RH frame, so mirror its X component too;
-    # otherwise left/right motion (e.g. "lean right", "right leg forward") comes out swapped.
-    trans = r_pos.numpy().copy()
-    trans[..., 0] *= -1.0
+    HumanML3D clips frequently end with a long static tail (the person finishes the action
+    and stands still). Streaming those frames makes the avatar look stopped while the timed
+    captions keep cycling, so the motion appears to "end first." Trimming the trailing
+    near-static frames keeps the motion and caption ending together.
 
-    return quats_xyzw, trans
+    Args:
+        joints: (T, J, 3) joint positions (e.g. from motion_to_unity_joints).
+        move_thresh: per-frame summed joint displacement below which a frame counts as
+            static (active frames here are ~0.1-1.0, static tail ~0.01).
+        pad: extra frames kept after the last moving frame so motion doesn't cut abruptly.
+
+    Returns:
+        Length in [1, T]; slice with joints[:active_length(joints)].
+    """
+    n = len(joints)
+    if n <= 1:
+        return n
+    vel = np.linalg.norm(np.diff(joints, axis=0), axis=-1).sum(axis=-1)  # (T-1,)
+    moving = np.flatnonzero(vel > move_thresh)
+    if moving.size == 0:
+        return n
+    return int(min(n, moving[-1] + 2 + pad))
 
 
 class MotionStreamServer:
     """Minimal one-way (Python -> Unity) JSON-over-WebSocket broadcaster.
 
     Python runs the server; the Unity client connects in and receives one JSON object
-    per text message. See eval_*_stream.py for the message schema.
+    per text message. See *_unity_stream.py for the message schema.
     """
 
     def __init__(self, host='0.0.0.0', port=8765):

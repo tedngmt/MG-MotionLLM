@@ -12,10 +12,10 @@ FineMotion's body-part descriptions are aligned to HumanML3D motions), so the on
 caption changes roughly every half second as the skeleton moves.
 
 Examples:
-    python3 eval_m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base --name 000000
-    python3 eval_m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base --split test --sample_seed 0
+    python3 m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base --name 000000
+    python3 m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base --split test --sample_seed 0
     # process every .npy dropped into ./input/ (used when --name/--motion_path are both omitted)
-    python3 eval_m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base
+    python3 m2dt_visualize.py --model_name ./m2dt-ft-from-GSPretrained-base
 """
 import os
 

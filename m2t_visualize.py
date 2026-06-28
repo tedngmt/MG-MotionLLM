@@ -7,10 +7,10 @@ through the VQ-VAE + motion-to-text model and visualizes the result, so it only 
 torch/transformers/matplotlib (no GloVe vectorizer, evaluator wrapper, spacy, or bert-score).
 
 Examples:
-    python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
-    python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --split test --sample_seed 0
+    python3 m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
+    python3 m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base --split test --sample_seed 0
     # process every .npy dropped into ./input/ (used when --name/--motion_path are both omitted)
-    python3 eval_m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
+    python3 m2t_visualize.py --model_name ./m2t-ft-from-GSPretrained-base
 """
 import os
 

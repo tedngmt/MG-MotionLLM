@@ -7,17 +7,18 @@ resolved motion is captioned and streamed in real time at the motion's fps.
 
 Per-frame JSON message schema (one Unity bone update per "frame" message):
     {"type": "start", "name": str, "fps": float, "num_frames": int, "caption": str}
-    {"type": "frame", "frame": int, "pose": [[x,y,z,w] x 24], "trans": [x,y,z], "caption": str}
+    {"type": "frame", "frame": int, "joints": [[x,y,z] x 22], "caption": str}
     {"type": "end", "name": str}
-"pose" is ordered to match SMPLModifyBones._boneNameToJointIndex (Pelvis=0 .. R_Hand=23,
-see utils/unity_stream.UNITY_JOINT_NAMES) -- feed it straight into
-SMPLModifyBones.updateBoneAngles(pose, trans) on the Unity side.
+"joints" are global joint positions (Unity space, index 0 = pelvis) ordered to match
+SMPLModifyBones._boneNameToJointIndex (Pelvis=0 .. R_Wrist=21, see
+utils/unity_stream.UNITY_JOINT_NAMES) -- feed straight into
+SMPLModifyBones.updateBoneAnglesFromJoints(joints) on the Unity side.
 
 Examples:
-    python3 eval_m2t_stream.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
-    python3 eval_m2t_stream.py --model_name ./m2t-ft-from-GSPretrained-base --split test --sample_seed 0
+    python3 m2t_unity_stream.py --model_name ./m2t-ft-from-GSPretrained-base --name 000000
+    python3 m2t_unity_stream.py --model_name ./m2t-ft-from-GSPretrained-base --split test --sample_seed 0
     # stream every .npy dropped into ./input/ (used when --name/--motion_path are both omitted)
-    python3 eval_m2t_stream.py --model_name ./m2t-ft-from-GSPretrained-base
+    python3 m2t_unity_stream.py --model_name ./m2t-ft-from-GSPretrained-base
 """
 import asyncio
 import os
@@ -27,7 +28,7 @@ import torch
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
 from options import option
-from utils.unity_stream import MotionStreamServer, motion_to_unity_pose
+from utils.unity_stream import MotionStreamServer, motion_to_unity_joints, active_length
 from utils.inference_utils import (
     DATASET_CONFIG, resolve_samples, load_vqvae, motion_to_token_string, generate_text,
     load_gt_caption, sample_output_dir,
@@ -74,19 +75,21 @@ async def run(args):
         print(f'[Generated caption] {caption}')
 
         fps = args.fps or cfg['fps']
-        quats, trans = motion_to_unity_pose(raw_motion, cfg['joints_num'])
+        joints = motion_to_unity_joints(raw_motion, cfg['joints_num'])
+        joints = joints[:active_length(joints)]  # drop the trailing static tail so the
+                                                 # motion and captions end together
 
         await server.broadcast({'type': 'start', 'name': name, 'fps': fps,
-                                'num_frames': len(quats), 'caption': caption})
-        frame_dt = 1.0 / fps
-        for i in range(len(quats)):
+                                'num_frames': len(joints), 'caption': caption})
+        frame_dt = 1.0 / (fps * max(args.speed, 1e-3))
+        for i in range(len(joints)):
             await server.broadcast({'type': 'frame', 'frame': i,
-                                    'pose': quats[i].tolist(), 'trans': trans[i].tolist(),
+                                    'joints': joints[i].tolist(),
                                     'caption': caption})
             await asyncio.sleep(frame_dt)
         await server.broadcast({'type': 'end', 'name': name})
 
-        sample_dir = sample_output_dir(args.out_dir, 'm2t_stream', name)
+        sample_dir = sample_output_dir(args.out_dir, 'm2t_unity_stream', name)
         text_path = os.path.join(sample_dir, f'{name}.txt')
         with open(text_path, 'w', encoding='utf-8') as f:
             f.write('Generated:\n' + caption + '\n')
@@ -112,6 +115,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_new_tokens', type=int, default=40)
     parser.add_argument('--out_dir', type=str, default='./visualizations')
     parser.add_argument('--fps', type=float, default=None, help='Override playback fps (defaults to the dataset fps)')
+    parser.add_argument('--speed', type=float, default=1.0, help='Playback speed multiplier (0.5 = half speed, 2.0 = double); independent of --fps')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='WebSocket server bind address')
     parser.add_argument('--port', type=int, default=8765, help='WebSocket server port')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
