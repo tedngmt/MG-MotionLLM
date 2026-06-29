@@ -1,0 +1,468 @@
+% ====================================================================
+%  MG-MotionLLM: Research Paper and Technical Implementation Report
+%  Author: Ted Ng Min Teck
+%  Compile:  pdflatex MG-MotionLLM_Report.tex   (run twice for refs/TOC)
+%  or paste into Overleaf. Self-contained: only standard TeX Live / MiKTeX packages.
+% ====================================================================
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[a4paper,margin=1.9cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{abstract}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xurl} % allow long URLs to break inside narrow (two-column) columns
+
+% --- look & feel ---
+\definecolor{accent}{RGB}{31,78,121}
+\titleformat{\section}{\color{accent}\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\color{accent}\normalsize\bfseries}{\thesubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{10pt}{4pt}
+\titlespacing*{\subsection}{0pt}{6pt}{2pt}
+\hypersetup{colorlinks=true, linkcolor=accent, urlcolor=accent, citecolor=accent}
+\setlength{\columnsep}{0.7cm}
+
+\newcommand{\code}[1]{\texttt{\small #1}}
+\setlist[itemize]{leftmargin=1.2em, itemsep=1pt, topsep=2pt, parsep=0pt}
+\setlist[enumerate]{leftmargin=1.4em, itemsep=1pt, topsep=2pt}
+
+% --- abstract styling ---
+\renewcommand{\abstractnamefont}{\normalfont\bfseries\color{accent}}
+\renewcommand{\abstracttextfont}{\normalfont\small}  % upright (not italic)
+\setlength{\absleftindent}{0pt}   % full column width, aligned with body text
+\setlength{\absrightindent}{0pt}
+
+% ====================================================================
+\title{\vspace{-1.0cm}\color{accent}\bfseries
+  MG-MotionLLM: Research Paper and\\ Technical Implementation Report\vspace{2pt}}
+
+\author{
+  \textbf{Ted Ng Min Teck}\\[2pt]
+  \normalsize\href{mailto:ted.ngmt@outlook.com}{ted.ngmt@outlook.com}\\[2pt]
+  \normalsize\itshape A review of MG-MotionLLM (CVPR 2025)
+  \href{https://arxiv.org/abs/2504.02478}{[arXiv:2504.02478]}\\
+  \normalsize\itshape with a technical account of the visualization and Unity streaming pipeline
+}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent MG-MotionLLM is a unified motion--language model that performs both motion
+comprehension (motion$\rightarrow$text) and generation (text$\rightarrow$motion) across
+\emph{multiple granularities}, from coarse one-sentence captions to fine-grained, per-body-part,
+per-time-window ``motion scripts.'' This report summarizes the model's architecture (a frozen
+motion VQ-VAE tokenizer coupled to a T5-based motion-aware language model with a unified
+motion+text vocabulary) and its two-stage multi-granularity training scheme. We then discuss
+the choice of an SMPL-based representation over file formats such as BVH/FBX, contrast the simple
+(coarse) and detailed (fine-grained) captioning tasks, and give a technical account of the
+implemented inference pipeline: an offline matplotlib renderer and a live Unity WebSocket stream
+whose receiver reconstructs SMPL bone rotations from convention-free global joint positions.
+\end{abstract}
+
+% ====================================================================
+\section{Introduction}
+Motion comprehension and generation underpin applications across AR/VR, games, and animation.
+Recent motion-aware large language models (MotionGPT, MotionLLM, M\textsuperscript{3}GPT) unify
+these directions but model only \emph{coarse-grained} motion$\leftrightarrow$text, where a few
+words describe an entire sequence. MG-MotionLLM~\cite{mgmotionllm} instead targets
+\textbf{multiple granularities} in one framework: alongside classical text-to-motion and motion
+captioning, it introduces fine-grained tasks such as motion-to-detailed-text and temporal motion
+localization. The model is pretrained on \textbf{28 motion-relevant tasks} (12 classical coarse +
+16 new fine-grained), and the central finding is that these granularities \emph{mutually reinforce}
+one another, improving even the classical coarse benchmarks.
+
+This report has two purposes: (i) to summarize the paper's model and design choices, and (ii) to
+document the accompanying technical pipeline (in particular the visualization and Unity
+streaming components) as implemented in the released codebase.
+
+% ====================================================================
+\section{Model architecture}
+MG-MotionLLM consists of two components, each frozen after its own training: a motion VQ-VAE that
+converts between raw motion and discrete tokens, and a T5-based motion-aware language model that
+aligns motion tokens with text.
+
+\subsection{Motion VQ-VAE (tokenizer)}
+Adopted from T2M-GPT~\cite{t2mgpt}, the VQ-VAE has an encoder $E$, decoder $D$, and a learnable codebook
+$B=\{b_k\}_{k=1}^{K}$. A $T$-frame motion $M=[m_1,\dots,m_T]$, $m_t\in\mathbb{R}^{263}$, is encoded
+and temporally downsampled by rate $l$ ($\sim$4 frames per token), then each latent $z_i$ is
+quantized to its nearest codebook entry:
+\begin{equation}
+  c_i = \arg\min_{b_k\in B}\ \lVert z_i - b_k \rVert_2 .
+\end{equation}
+The decoder reconstructs $\hat{M}=D(\hat{Z})$, and training minimizes reconstruction, embedding,
+and commitment terms:
+\begin{equation}
+  \mathcal{L} = \lVert M-\hat{M}\rVert_2 + \lVert\mathrm{sg}(Z)-\hat{Z}\rVert_2
+              + \beta\lVert Z-\mathrm{sg}(\hat{Z})\rVert_2 ,
+\end{equation}
+with $\mathrm{sg}(\cdot)$ the stop-gradient operator. In the codebase
+(\code{utils/inference\_utils.py}), \code{vqvae\_net.encode()} emits the literal string
+\code{<Motion Tokens><id>\ldots</Motion Tokens>}; the codebook size is $K=1024$.
+
+\subsection{Motion-aware language model}
+The text vocabulary $V_t$ is extended with a motion vocabulary $V_m$ (one token per codebook
+index) and special tokens $V_s$: \code{<Motion Tokens>}/\code{</Motion Tokens>}, \code{<SEP>}
+(separating per-snippet descriptions), and \code{<Motionless>} (a snippet with no significant
+movement). With the unified vocabulary $V=\{V_t,V_m,V_s\}$, \emph{every} task becomes
+sequence-to-sequence: instruction $+$ input tokens $\rightarrow$ output tokens. Following
+MotionGPT~\cite{motiongpt}, the backbone is \textbf{T5}; the released checkpoints are plain
+\code{T5ForConditionalGeneration} models decoded greedily (\code{num\_beams=1, do\_sample=False}).
+
+\subsection{Two-stage training}
+\begin{enumerate}
+  \item \textbf{Granularity-Synergy Pre-training:} all 28 tasks jointly, so coarse tasks bootstrap
+        semantics for fine-grained ones while auxiliary localization/captioning tasks sharpen
+        temporal and detail understanding. (Direct tuning on detailed text alone \emph{hurt} t2m
+        Top-3 retrieval, $77.3\%\!\rightarrow\!75.0\%$: the added detail drowned out the global
+        semantics.)
+  \item \textbf{Task-Specific Instruction Tuning:} fine-tune the pretrained base per task.
+        Checkpoints follow \code{*-ft-from-GSPretrained-\{small,base,large\}}.
+\end{enumerate}
+
+% ====================================================================
+\section{Why SMPL, and not BVH/FBX?}
+The paper does not literally argue ``SMPL vs.\ BVH/FBX''; it inherits the HumanML3D~\cite{humanml3d}
+263-d representation derived from SMPL/SMPL-H bodies in AMASS. SMPL (Skinned Multi-Person Linear
+model)~\cite{smpl} is a parametric 3D human body model from the Max Planck Institute that
+factorizes a body into shape ($\beta$) and pose ($\theta$) parameters and is compatible with
+standard engines (Maya, Blender, Unity, Unreal); HumanML3D builds on its 22-joint skeleton.
+Table~\ref{tab:smpl} contrasts why this representation is the right learning substrate while a raw
+BVH/FBX file is not.
+
+\begin{table*}[t]
+\centering\footnotesize
+\renewcommand{\arraystretch}{1.3}
+\caption{Why a SMPL-based feature representation, rather than a BVH or FBX file format.}
+\label{tab:smpl}
+\begin{tabularx}{\textwidth}{@{}l X X X@{}}
+\toprule
+\textbf{Aspect} & \textbf{SMPL-based HumanML3D (263-d)} & \textbf{BVH (Biovision Hierarchy)} & \textbf{FBX (Filmbox)} \\
+\midrule
+What it is & Fixed, redundant per-frame feature vector over a canonical 22-joint skeleton (root
+velocities, local joint positions, 6D joint rotations, velocities, foot-contact flags). &
+Plain-text mocap format: a skeleton hierarchy plus per-joint Euler-angle rotation tracks (only the
+root has translation). & Proprietary scene container: meshes, skinning, skeleton, materials,
+cameras, blendshapes, and animation ``takes.'' \\
+Skeleton & One universal topology; every clip is directly comparable and learnable. &
+Arbitrary, rig-specific joint counts/names/offsets; varies by capture system. & Whatever the author
+rigged; varies per asset. Both need retargeting to compare. \\
+Pose encoding & Compact fixed-width numeric tensor; convention-free joint positions recoverable. &
+Euler angles in a channel-specific order; gimbal lock, FK needed for positions. & Euler/quaternion
+tracks inside a hierarchical scene graph; SDK needed to parse. \\
+Body shape & Parametric shape ($\beta$) over a canonical mesh. & None; bone lengths frozen in the
+rest pose, no mesh. & Mesh/skin baked per asset; no canonical shape parameterization. \\
+For an LLM & Already a clean tensor, trivially VQ-VAE-quantizable into discrete tokens. &
+Variable-length, convention-dependent; no natural fixed-width tokenization. & Heterogeneous scene
+graph, not a tensor; untokenizable as-is. \\
+Benchmarking & HumanML3D is the standard t2m/m2t benchmark with paired text and metrics. &
+No standard text pairing or metrics. & No standard text pairing or metrics. \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+In short, \textbf{SMPL is the body model} (a parametric human giving a consistent 22-joint
+topology and a \code{recover\_from\_ric} path back to 3D positions), whereas \textbf{BVH/FBX are
+file/transport formats} carrying rig-specific rotations with no semantic normalization and no text
+alignment. One converts SMPL$\rightarrow$FBX for a DCC tool \emph{at the end}; one does not train
+on FBX. The repo reflects this: motion lives as \code{new\_joint\_vecs/*.npy} (263-d), and the
+visual/streaming layers call \code{recover\_from\_ric(\dots)} to obtain 22 global joint positions.
+
+\subsection{A closer look at BVH}
+BVH (Biovision Hierarchy), developed by Biovision and supported across Maya, Blender, and
+MotionBuilder, is a plain-text motion-capture format~\cite{bvh} with two parts. The
+\code{HIERARCHY} section declares the skeleton as a tree: a \code{ROOT} joint and nested
+\code{JOINT} blocks, each carrying an \code{OFFSET} (the bone's rest-pose displacement from its
+parent) and a \code{CHANNELS} list naming its degrees of freedom, typically six for the root
+(\code{Xposition Yposition Zposition Zrotation Xrotation Yrotation}) and three rotation channels for
+every other joint, with leaf bones terminated by an \code{End Site}. The \code{MOTION} section
+then gives \code{Frames}, a \code{Frame Time} (seconds per frame, i.e.\ the inverse of the fps), and
+one whitespace-separated row of channel values per frame, in the order the channels were declared.
+
+Several properties of this design are exactly what make BVH a poor \emph{learning} substrate,
+reinforcing Table~\ref{tab:smpl}:
+\begin{itemize}
+  \item \textbf{Euler-angle rotations.} Poses are stored as per-joint Euler angles (in degrees)
+        applied in a channel-specific order, so they suffer gimbal lock and ambiguous
+        interpolation, and their meaning depends on the rotation-order convention, the same kind
+        of convention mismatch that makes streaming rotations to Unity unsafe (see \S\ref{sec:stream}).
+  \item \textbf{Rotation-only joints, fixed bone lengths.} Only the root carries translation; every
+        other joint is rotation-only, with limb lengths frozen by the rest-pose \code{OFFSET}s.
+        Recovering global joint positions requires forward kinematics down the chain.
+  \item \textbf{No standard skeleton.} Joint names, counts, and hierarchy vary by capture system,
+        so two BVH files are generally not comparable without retargeting, unlike SMPL's single
+        fixed 22-joint topology.
+  \item \textbf{Geometry-free.} BVH stores only a skeleton and its animation: no mesh, skin
+        weights, body-shape parameters, or materials. (FBX adds these, but as a heavyweight scene
+        container, not a tokenizable tensor.)
+\end{itemize}
+In short, an LLM-friendly motion representation wants a fixed-width, convention-free,
+shape-normalized tensor; BVH instead offers a variable, convention-dependent,
+forward-kinematics-bound rotation stream, which is why the HumanML3D/SMPL feature vector, not
+BVH, is the substrate here.
+
+\subsection{A closer look at FBX}
+FBX (Filmbox) is the de-facto interchange format of the games and VFX industries: Maya, 3ds Max,
+Blender, Unity, and Unreal all import and export it. It is a \emph{proprietary} format owned by
+Autodesk (originally Kaydara; Autodesk since 2006)~\cite{fbx}, stored as binary or ASCII and
+read/written through the Autodesk FBX SDK. Unlike BVH, FBX is a full \emph{scene container}: it can
+hold meshes and geometry, skinning weights, a skeleton, materials and textures, cameras and lights,
+blendshapes, and multiple animation ``takes.''
+
+Given this ubiquity, why does the model not use FBX? Because FBX and SMPL sit at \emph{different
+levels}, and comparing them is a category error like BVH:
+\begin{itemize}
+  \item \textbf{FBX is a delivery/authoring format; SMPL is a body model.} They are complementary,
+        not competing. One \emph{exports} a SMPL body to FBX to hand it to an engine; indeed,
+        this report's own Unity avatar is an FBX import of the SMPL mesh. FBX is used at the delivery
+        end; SMPL is the representation the network actually learns in.
+  \item \textbf{Not a tensor.} An FBX file is a heterogeneous, hierarchical scene graph, not a
+        fixed-width numeric array; there is no natural way to tokenize it for a language model.
+  \item \textbf{Rig-specific, shape-free.} The skeleton inside an FBX is whatever the author rigged:
+        joint names, counts, and bind poses vary, so clips are not comparable without
+        retargeting, and there is no canonical body-shape parameterization (SMPL's $\beta$).
+  \item \textbf{Proprietary and heavyweight.} Faithful parsing depends on Autodesk's SDK, and the
+        format carries far more (materials, cameras, lights) than a motion learner needs.
+\end{itemize}
+The training substrate therefore stays the compact, fixed, shape-normalized HumanML3D/SMPL feature
+vector; FBX (and its SMPL avatar) belongs at the visualization/engine end of the pipeline, exactly
+where the Unity side uses it.
+
+% ====================================================================
+\section{Simple vs.\ detailed captioning}
+The two captioning granularities are distinct tasks with different data, formats, and pipelines.
+
+\subsection{Simple caption: Motion-to-Text (m2t)}
+A single short sentence summarizing the clip (``a person walks forward at a normal pace''). Ground
+truth is HumanML3D's 44{,}970 sequence-level descriptions (over 14{,}616 motions, downsampled to
+20\,fps). Output is short (\code{max\_new\_tokens=40}), one caption per clip, rendered as a static
+title.
+
+\subsection{Detailed caption: Motion-to-Detailed-Text (m2dt)}
+A time-segmented, body-part-level ``motion script.'' The detailed text comes from
+FineMotion~\cite{finemotion}, which re-annotates HumanML3D motions at a fixed $0.5$\,s granularity.
+FineMotion provides \emph{Body-Part Movement Snippet Descriptions} (BPMSD), one short
+description per $0.5$\,s snippet, and \emph{Body-Part Movement Paragraphs} (BPMP) that
+concatenate them into a full-sequence narrative; it contains $21{,}346$ human-annotated and
+$420{,}968$ automatically generated BPMSD across $29{,}232$ motion sequences. The codebase loads
+these as \code{BPMSD\_auto.json} and \code{BPMSD\_human.json}. The model joins snippets with
+\code{<SEP>} (empty ones become \code{<Motionless>}), produces long output
+(\code{max\_new\_tokens=1536}), and displays it \emph{in sync} with the motion, changing roughly
+every half second. Crucially, the clip is truncated so that VQ-VAE token boundaries (4 frames each)
+and snippet boundaries ($0.5$\,s $=10$ frames at 20\,fps) stay aligned via an LCM unit length, so
+the text never drifts out of phase with the pose.
+
+% ====================================================================
+\section{Implemented inference pipeline}
+The released demos wrap the checkpoints with a shared front-end:
+\begin{center}\footnotesize\ttfamily
+.npy $\rightarrow$ normalize $\rightarrow$ VQ-VAE.encode $\rightarrow$\\
+``<Motion Tokens>\ldots'' $\rightarrow$ +instruction $\rightarrow$\\
+T5.generate $\rightarrow$ decode $\rightarrow$ parse
+\end{center}
+Input priority: explicit \code{--motion\_path}, then dataset \code{--name}, then every \code{.npy}
+under \code{./input/}, else a random clip from the split. Two output back-ends follow.
+
+\subsection{(A) Offline video}
+\code{recover\_from\_ric} turns the 263-d motion into $(T,22,3)$ joint positions;
+\code{plot\_3d\_motion} renders a matplotlib 3D-skeleton animation along the SMPL kinematic chain
+with caption(s) overlaid (static title for m2t, timed captions for m2dt). It saves
+\code{<name>.mp4} (or \code{.gif} without ffmpeg) plus a \code{<name>.txt} of generated and
+ground-truth text.
+
+\subsection{(B) Live Unity WebSocket stream}
+\label{sec:stream}
+A minimal one-way (Python$\rightarrow$Unity) JSON-over-WebSocket server (\code{MotionStreamServer},
+default \code{ws://0.0.0.0:8765}) emits \code{start} $\rightarrow$ per-frame \code{frame}
+(\code{\{frame, joints:[[x,y,z]$\times$22], rotations:[[x,y,z,w]$\times$22], caption\}}) $\rightarrow$
+\code{end}. Key design points:
+\begin{itemize}
+  \item \textbf{Positions and global rotations.} Each frame carries both: 22 global joint
+        positions and 22 global joint orientations (quaternions). \emph{Local} cont6d rotations
+        cannot be applied to Unity bones directly: HumanML3D/T2M rotate a bone's offset by the
+        \emph{child's} accumulated global rotation, Unity's \code{Transform.localRotation} by the
+        \emph{parent's}, so they agree only at rest pose. The \code{rotations} are therefore each
+        joint's \emph{global} orientation, recovered from the cont6d channels by forward kinematics
+        and X-mirrored into Unity's frame; being global they are convention-free (like positions)
+        and additionally carry the per-bone axial twist that positions cannot express (verified to
+        agree with the streamed positions to ${<}0.04^\circ$).
+  \item \textbf{Coordinate fix:} HumanML3D is right-handed Y-up, Unity left-handed Y-up, so X is
+        mirrored (\code{joints[...,0]\,*=\,-1}), preserving heading.
+  \item \textbf{Joint order} matches the Unity rig: Pelvis(0)\,\ldots\,R\_Wrist(21); hand joints
+        22/23 stay at bind pose (HumanML3D doesn't cover them).
+  \item \textbf{Static-tail trimming} (\code{active\_length()}) drops the long ``stand still'' tail
+        so motion and cycling captions end together.
+  \item \textbf{Playback} is paced by fps and a \code{--speed} multiplier; the per-frame caption is
+        whichever $0.5$\,s snippet is active.
+\end{itemize}
+
+\subsection{Why a WebSocket transport?}
+The sender (the PyTorch model) and the receiver (Unity) almost never run in the same place:
+inference runs in \textbf{Python}, typically on \textbf{Linux} with CUDA (here under WSL), while the
+Unity SMPL renderer runs on \textbf{Windows}. A WebSocket over TCP is the simplest bridge that
+crosses this boundary:
+\begin{itemize}
+  \item \textbf{Cross-platform, cross-process, cross-machine.} The same JSON-over-TCP stream works
+        whether Python and Unity are two processes on one box, a Linux GPU host and a Windows
+        workstation, or two machines on a LAN, with no OS-specific IPC.
+  \item \textbf{Language-agnostic and minimal.} The Python side uses the \code{websockets} library;
+        the Unity side is a tiny hand-rolled C\# client. Plain-text JSON frames are trivial to
+        produce and parse on both ends.
+  \item \textbf{Real-time push.} A persistent, full-duplex connection lets the server push one pose
+        per frame at the clip's fps with low latency, a far better fit for streaming animation
+        than per-frame HTTP request/response.
+  \item \textbf{Decouples compute from rendering.} Heavy GPU inference can stay on a headless server
+        while a separate machine renders the avatar smoothly.
+\end{itemize}
+The alternatives are worse fits: dumping intermediate \code{.npy}/\code{.bvh} files is not live;
+embedding a Python runtime inside Unity 5.6 invites version/ABI conflicts; named pipes and shared
+memory are same-machine and OS-specific; and gRPC/REST add tooling while still being oriented around
+request/response rather than continuous push. WebSocket is ubiquitous, firewall-friendly, and
+crosses Linux$\leftrightarrow$Windows with zero platform-specific code.
+
+% ====================================================================
+\section{The Unity receiver (\texttt{smpl\_mecanim})}
+The Python stream scripts are only the sender; the receiver is a separate Unity 5.6.2f1 project,
+\code{smpl\_mecanim}, that renders the SMPL body model and drives it live. When idle, each avatar
+falls back to a Mecanim idle loop.
+
+\subsection{Scripts}
+\begin{itemize}
+  \item \code{MinimalWebSocketClient.cs}: a hand-rolled RFC-6455 client (Unity 5.6 has no native
+        WebSocket): HTTP Upgrade handshake with Sec-WebSocket-Accept verification, a background
+        read thread, and frames drained on the main thread via \code{TryDequeue} (Unity APIs are
+        not thread-safe).
+  \item \code{MotionStreamClient.cs}: the receiver/driver.
+  \item \code{CaptionDisplay.cs}: the on-screen overlay (legacy OnGUI; the scene has no Canvas).
+  \item \code{SMPLBlendshapes.ApplyStreamedJoints()} bridges into
+        \code{SMPLModifyBones.updateBoneAnglesFromJoints()}, the position$\rightarrow$rotation
+        retargeter.
+\end{itemize}
+
+\subsection{Receive and drive}
+\code{MotionStreamClient} self-bootstraps via \code{RuntimeInitializeOnLoadMethod} (no scene
+editing) and auto-reconnects every $2$\,s. It parses the stream with SimpleJSON, and applies the
+pose in \code{LateUpdate} (after the Animator phase) so a streamed pose wins over the Mecanim
+idle and is held steady between messages (Python streams ${\sim}20$--$30$\,fps, Unity renders
+faster). With interpolation on, it Lerps between consecutive poses over the measured arrival
+interval, staying smooth and auto-adapting to the sender's \code{--fps}/\code{--speed}. A dropped
+connection is treated as \code{end}, releasing control back to idle. Captions read \code{caption}
+or, in compare mode, \code{caption\_m2t}+\code{caption\_m2dt}, labeled ``Simple''/``Detail.''
+
+\subsection{The retarget}
+\code{updateBoneAnglesFromJoints} is why positions are streamed: Unity rebuilds each bone's rotation
+from global joint positions by aiming the bone at its child joint. Over the 22-joint map it captures
+the bind pose once in avatar-local space, then:
+\begin{itemize}
+  \item \textbf{Pelvis:} full orientation from the spine direction (up, Pelvis$\rightarrow$Spine1)
+        and hip line (right, L\_Hip$\rightarrow$R\_Hip); positioned from \code{targets[0]}.
+  \item \textbf{Torso (spine/neck):} full basis with a blended hip/shoulder ``right'' line, so
+        twist is reproduced rather than shearing the mesh.
+  \item \textbf{Hips (thighs):} twist recovered from the knee$\rightarrow$ankle pole so the knee
+        points correctly.
+  \item \textbf{Other limbs:} parent-relative swing: inherit the parent's world rotation, then
+        bend only to aim at the next joint (swing-only, no relative twist).
+\end{itemize}
+Because the stream also carries each joint's global orientation (\S\ref{sec:stream}), a
+rotation-driven retarget can recover the limb axial twist that this position-based version omits.
+
+\subsection{Running it}
+The SMPL package is research-licensed and not committed (only the modified C\# scripts are tracked);
+one downloads the SMPL Unity package, assigns avatar materials, imports idle/walk mocap, and opens
+in Unity 5.6.x. Then run e.g.\
+\code{python3 m2t\_unity\_stream.py --model\_name ./m2t-ft-from-GSPretrained-base --name 000000} and
+press Play; the client auto-connects to \code{ws://127.0.0.1:8765}.
+
+% ====================================================================
+\section{Conclusion}
+MG-MotionLLM unifies coarse and fine-grained motion comprehension and generation in a single
+T5-based model over a shared motion+text vocabulary, with a frozen VQ-VAE tokenizer and a
+two-stage, multi-granularity training scheme in which tasks at different granularities reinforce
+one another. Its reliance on the SMPL-based HumanML3D representation, rather than rig-specific
+file formats, is what makes motion tokenizable and benchmarkable. The accompanying pipeline turns
+generated motion and text into either offline video or a live Unity stream; the streaming design's
+key insight is to transmit convention-free joint \emph{positions} and reconstruct bone rotations on
+the Unity side by aiming each bone at its child joint.
+
+% ====================================================================
+\section*{Acknowledgments and AI Use}
+\addcontentsline{toc}{section}{Acknowledgments and AI Use}
+In the interest of transparency, the author discloses that both the technical implementation (the
+visualization and Unity streaming pipeline built on top of the original MG-MotionLLM release) and
+the writing of this report were produced with the assistance of an AI coding assistant
+(Anthropic's Claude). The AI was used for code implementation, debugging, and drafting; all
+outputs were reviewed, tested, and verified by the author, who takes full responsibility for the
+content. The underlying MG-MotionLLM model, datasets, and SMPL body model are the work of their
+respective authors, as cited.
+
+% ====================================================================
+\section{Resources and Links}
+\label{sec:resources}
+A categorized list of code, datasets, and background material used or referenced in this report.
+% --------------------------------------------------------------------
+% TO ADD A NEW LINK: copy a \litem line into the relevant list below.
+%   \litem{https://example.com}{Short description}
+% Add new categories by duplicating a \subsection + itemize block.
+% --------------------------------------------------------------------
+\newcommand{\litem}[2]{\item \href{#1}{\nolinkurl{#1}}\\ \small\textit{#2}}
+
+\subsection{Research paper}
+\begin{itemize}[leftmargin=1.4em]
+  \litem{https://arxiv.org/abs/2504.02478}{MG-MotionLLM: A Unified Framework for Motion Comprehension and Generation across Multiple Granularities (CVPR 2025): the paper summarized in this report.}
+\end{itemize}
+
+\subsection{Implementation}
+\begin{itemize}[leftmargin=1.4em]
+  \litem{https://github.com/BizhuWu/MG-MotionLLM}{Official MG-MotionLLM repository (this work and the streaming/visualization add-on).}
+  \litem{https://github.com/EricGuo5513/HumanML3D}{HumanML3D: motion--text dataset (14{,}616 motions, 44{,}970 descriptions, 20\,fps) and the 263-d motion representation generation.}
+  \litem{https://github.com/BizhuWu/FineMotion}{FineMotion: fine-grained, per-body-part detailed-caption dataset (BPMSD/BPMP at 0.5\,s granularity).}
+  \litem{https://smpl.is.tue.mpg.de/}{SMPL body model: used for the Unity avatar/rig (the \texttt{smpl\_mecanim} receiver).}
+\end{itemize}
+
+\subsection{Further reading and background}
+\begin{itemize}[leftmargin=1.4em]
+  \litem{https://medium.com/meshcapade/the-story-of-smpl-3ecea53cb5ed}{Meshcapade: ``The Story of SMPL'': accessible background on the SMPL body model.}
+  \litem{https://me.meshcapade.com}{Meshcapade: SMPL-based avatar and motion tooling.}
+  \litem{https://research.cs.wisc.edu/graphics/Courses/cs-838-1999/Jeff/BVH.html}{BVH file-format specification: HIERARCHY/MOTION sections, OFFSET/CHANNELS fields, Euler-angle channels.}
+  \litem{https://www.autodesk.com/products/fbx/overview}{Autodesk FBX: the proprietary interchange/scene format used by Maya, 3ds Max, Blender, Unity, and Unreal.}
+\end{itemize}
+
+% \subsection{Add your own category here}
+% \begin{itemize}[leftmargin=1.4em]
+%   \litem{https://...}{Description.}
+% \end{itemize}
+
+% ====================================================================
+\begin{thebibliography}{1}
+\small
+\bibitem{mgmotionllm} B.~Wu, J.~Xie, K.~Shen, Z.~Kong, J.~Ren, R.~Bai, R.~Qu, and L.~Shen.
+  ``MG-MotionLLM: A Unified Framework for Motion Comprehension and Generation across Multiple
+  Granularities.'' \emph{CVPR}, 2025. arXiv:2504.02478.
+\bibitem{t2mgpt} J.~Zhang et al. ``T2M-GPT: Generating Human Motion from Textual Descriptions with
+  Discrete Representations.'' \emph{CVPR}, 2023.
+\bibitem{humanml3d} C.~Guo et al. ``Generating Diverse and Natural 3D Human Motions from Text.''
+  \emph{CVPR}, 2022.
+\bibitem{motiongpt} B.~Jiang et al. ``MotionGPT: Human Motion as a Foreign Language.''
+  \emph{NeurIPS}, 2023.
+\bibitem{smpl} M.~Loper, N.~Mahmood, J.~Romero, G.~Pons-Moll, and M.~J.~Black.
+  ``SMPL: A Skinned Multi-Person Linear Model.'' \emph{ACM Trans.\ Graphics (SIGGRAPH Asia)},
+  34(6), 2015. \url{https://smpl.is.tue.mpg.de/}
+\bibitem{finemotion} B.~Wu et al. ``FineMotion: A fine-grained, body-part-level human motion
+  description dataset.'' \url{https://github.com/BizhuWu/FineMotion}
+\bibitem{bvh} Biovision. ``Biovision Hierarchy (BVH) Motion Capture File Format.''
+  Format specification. \url{https://research.cs.wisc.edu/graphics/Courses/cs-838-1999/Jeff/BVH.html}
+\bibitem{fbx} Autodesk. ``FBX (Filmbox): 3D Asset Exchange Format and FBX SDK.''
+  Proprietary format (orig.\ Kaydara; Autodesk since 2006).
+  \url{https://www.autodesk.com/products/fbx/overview}
+\end{thebibliography}
+
+\end{document}

@@ -430,9 +430,8 @@ Each frame *also* carries `rotations` from `motion_to_unity_joint_rotations()`: 
 orientation, recovered from the same cont6d channels by forward kinematics and X-mirrored into Unity's
 frame. Being global (not local) these are likewise convention-free, and they additionally carry the
 per-bone **axial twist** that positions cannot express (e.g. forearm pronation). They are verified to
-agree with the streamed positions to `< 0.04°` (bone directions). The current Unity receiver ignores this
-field -- it's provided for callers that want to pose bones by rotation (which would recover that twist)
-instead of by position.
+agree with the streamed positions to `< 0.04°` (bone directions), and are available for a rotation-driven
+retarget that recovers that twist (vs. the position-based aiming the avatar uses today).
 
 
 ## 8. Acknowledgement
