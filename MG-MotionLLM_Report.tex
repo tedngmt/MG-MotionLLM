@@ -130,6 +130,30 @@ MotionGPT~\cite{motiongpt}, the backbone is \textbf{T5}; the released checkpoint
 \end{enumerate}
 
 % ====================================================================
+\section{Simple vs.\ detailed captioning}
+The two captioning granularities are distinct tasks with different data, formats, and pipelines.
+
+\subsection{Simple caption: Motion-to-Text (m2t)}
+A single short sentence summarizing the clip (``a person walks forward at a normal pace''). Ground
+truth is HumanML3D's 44{,}970 sequence-level descriptions (over 14{,}616 motions, downsampled to
+20\,fps). Output is short (\code{max\_new\_tokens=40}), one caption per clip, rendered as a static
+title.
+
+\subsection{Detailed caption: Motion-to-Detailed-Text (m2dt)}
+A time-segmented, body-part-level ``motion script.'' The detailed text comes from
+FineMotion~\cite{finemotion}, which re-annotates HumanML3D motions at a fixed $0.5$\,s granularity.
+FineMotion provides \emph{Body-Part Movement Snippet Descriptions} (BPMSD), one short
+description per $0.5$\,s snippet, and \emph{Body-Part Movement Paragraphs} (BPMP) that
+concatenate them into a full-sequence narrative; it contains $21{,}346$ human-annotated and
+$420{,}968$ automatically generated BPMSD across $29{,}232$ motion sequences. The codebase loads
+these as \code{BPMSD\_auto.json} and \code{BPMSD\_human.json}. The model joins snippets with
+\code{<SEP>} (empty ones become \code{<Motionless>}), produces long output
+(\code{max\_new\_tokens=1536}), and displays it \emph{in sync} with the motion, changing roughly
+every half second. Crucially, the clip is truncated so that VQ-VAE token boundaries (4 frames each)
+and snippet boundaries ($0.5$\,s $=10$ frames at 20\,fps) stay aligned via an LCM unit length, so
+the text never drifts out of phase with the pose.
+
+% ====================================================================
 \section{Why SMPL, and not BVH/FBX?}
 The paper does not literally argue ``SMPL vs.\ BVH/FBX''; it inherits the HumanML3D~\cite{humanml3d}
 263-d representation derived from SMPL/SMPL-H bodies in AMASS. SMPL (Skinned Multi-Person Linear
@@ -236,30 +260,6 @@ levels}, and comparing them is a category error like BVH:
 The training substrate therefore stays the compact, fixed, shape-normalized HumanML3D/SMPL feature
 vector; FBX (and its SMPL avatar) belongs at the visualization/engine end of the pipeline, exactly
 where the Unity side uses it.
-
-% ====================================================================
-\section{Simple vs.\ detailed captioning}
-The two captioning granularities are distinct tasks with different data, formats, and pipelines.
-
-\subsection{Simple caption: Motion-to-Text (m2t)}
-A single short sentence summarizing the clip (``a person walks forward at a normal pace''). Ground
-truth is HumanML3D's 44{,}970 sequence-level descriptions (over 14{,}616 motions, downsampled to
-20\,fps). Output is short (\code{max\_new\_tokens=40}), one caption per clip, rendered as a static
-title.
-
-\subsection{Detailed caption: Motion-to-Detailed-Text (m2dt)}
-A time-segmented, body-part-level ``motion script.'' The detailed text comes from
-FineMotion~\cite{finemotion}, which re-annotates HumanML3D motions at a fixed $0.5$\,s granularity.
-FineMotion provides \emph{Body-Part Movement Snippet Descriptions} (BPMSD), one short
-description per $0.5$\,s snippet, and \emph{Body-Part Movement Paragraphs} (BPMP) that
-concatenate them into a full-sequence narrative; it contains $21{,}346$ human-annotated and
-$420{,}968$ automatically generated BPMSD across $29{,}232$ motion sequences. The codebase loads
-these as \code{BPMSD\_auto.json} and \code{BPMSD\_human.json}. The model joins snippets with
-\code{<SEP>} (empty ones become \code{<Motionless>}), produces long output
-(\code{max\_new\_tokens=1536}), and displays it \emph{in sync} with the motion, changing roughly
-every half second. Crucially, the clip is truncated so that VQ-VAE token boundaries (4 frames each)
-and snippet boundaries ($0.5$\,s $=10$ frames at 20\,fps) stay aligned via an LCM unit length, so
-the text never drifts out of phase with the pose.
 
 % ====================================================================
 \section{Implemented inference pipeline}
