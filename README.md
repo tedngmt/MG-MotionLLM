@@ -406,23 +406,33 @@ generating/streaming.
 Per-frame JSON messages look like:
 ```json
 {"type": "start", "name": "000000", "fps": 20.0, "num_frames": 79, "caption": "a person kicks with their left leg."}
-{"type": "frame", "frame": 0, "joints": [[x, y, z], "...22 entries..."], "caption": "..."}
+{"type": "frame", "frame": 0, "joints": [[x, y, z], "...22 entries..."], "rotations": [[x, y, z, w], "...22 entries..."], "caption": "..."}
 {"type": "end", "name": "000000"}
 ```
 `joints` are 22 global joint *positions* (index 0 = pelvis) ordered to match
 `SMPLModifyBones._boneNameToJointIndex` (Pelvis=0 .. R_Wrist=21) in the Unity `smpl_mecanim` project --
-feed them straight into `SMPLModifyBones.updateBoneAnglesFromJoints(joints)` per frame. `m2dt_unity_stream.py`
-sends whichever body-part snippet is active as `caption`; `m2t_and_m2dt_unity_stream.py` sends both models'
-text as `caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to drive. The Unity
-overlay shows a single `caption` unlabeled, or both captions labeled `Simple:` (M2T) / `Detail:` (M2DT)
-when both are present.
+feed them straight into `SMPLModifyBones.updateBoneAnglesFromJoints(joints)` per frame. `rotations` are the
+same 22 joints' global *orientations* (Unity-frame quaternions, `x,y,z,w`); see the note below.
+`m2dt_unity_stream.py` sends whichever body-part snippet is active as `caption`; `m2t_and_m2dt_unity_stream.py`
+sends both models' text as `caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to
+drive. The Unity overlay shows a single `caption` unlabeled, or both captions labeled `Simple:` (M2T) /
+`Detail:` (M2DT) when both are present.
 
-Note: `motion_to_unity_joints()` in `utils/unity_stream.py` streams joint **positions**
-(`recover_from_ric`, X-mirrored into Unity's left-handed frame), not rotations. HumanML3D/T2M's per-joint
-cont6d rotations use a different forward-kinematics convention than Unity's `Transform.localRotation`
-(the bone offset is rotated by the *child's* accumulated global rotation, not the parent's), so they
-cannot be applied to bones directly. Positions are convention-free, and the Unity side rebuilds each
-bone's rotation by aiming it at its child joint (see `SMPLModifyBones.updateBoneAnglesFromJoints`).
+Note on positions vs. rotations: the avatar is **driven by positions**. `motion_to_unity_joints()` in
+`utils/unity_stream.py` streams joint positions (`recover_from_ric`, X-mirrored into Unity's left-handed
+frame), and the Unity side rebuilds each bone's rotation by aiming it at its child joint (see
+`SMPLModifyBones.updateBoneAnglesFromJoints`). The reason rotations aren't used to drive bones is that
+HumanML3D/T2M's per-joint *local* cont6d rotations follow a different forward-kinematics convention than
+Unity's `Transform.localRotation` (the bone offset is rotated by the *child's* accumulated global rotation,
+not the parent's), so they can't be applied to bones directly; positions are convention-free.
+
+Each frame *also* carries `rotations` from `motion_to_unity_joint_rotations()`: every joint's **global**
+orientation, recovered from the same cont6d channels by forward kinematics and X-mirrored into Unity's
+frame. Being global (not local) these are likewise convention-free, and they additionally carry the
+per-bone **axial twist** that positions cannot express (e.g. forearm pronation). They are verified to
+agree with the streamed positions to `< 0.04°` (bone directions). The current Unity receiver ignores this
+field -- it's provided for callers that want to pose bones by rotation (which would recover that twist)
+instead of by position.
 
 
 ## 8. Acknowledgement

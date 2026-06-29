@@ -10,13 +10,17 @@ client to ws://<this machine>:<--port> (default 8765).
 
 Per-frame JSON message schema:
     {"type": "start", "name": str, "fps": float, "num_frames": int, "caption_m2t": str}
-    {"type": "frame", "frame": int, "joints": [[x,y,z] x 22],
+    {"type": "frame", "frame": int, "joints": [[x,y,z] x 22], "rotations": [[x,y,z,w] x 22],
      "caption_m2t": str, "caption_m2dt": str}
     {"type": "end", "name": str}
 "joints" are global joint positions (Unity space, index 0 = pelvis) ordered to match
 SMPLModifyBones._boneNameToJointIndex (Pelvis=0 .. R_Wrist=21, see
 utils/unity_stream.UNITY_JOINT_NAMES) -- feed straight into
 SMPLModifyBones.updateBoneAnglesFromJoints(joints) on the Unity side.
+"rotations" are each joint's GLOBAL orientation (Unity-frame quaternion, x,y,z,w) recovered
+from the motion's cont6d channels; same joint order. Positions still drive the avatar -- the
+rotations are provided alongside (they additionally carry per-bone axial twist that positions
+cannot express) for callers that want to pose bones by rotation instead.
 
 Examples:
     python3 m2t_and_m2dt_unity_stream.py \\
@@ -35,7 +39,9 @@ import torch
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
 from options import option
-from utils.unity_stream import MotionStreamServer, motion_to_unity_joints, active_length
+from utils.unity_stream import (
+    MotionStreamServer, motion_to_unity_joints, motion_to_unity_joint_rotations, active_length,
+)
 from utils.inference_utils import (
     DATASET_CONFIG, resolve_samples, load_vqvae, motion_to_token_string, generate_text,
     load_gt_caption, load_gt_detail, parse_motion_script, sample_output_dir,
@@ -117,8 +123,10 @@ async def run(args):
         ]
 
         joints = motion_to_unity_joints(raw_motion, cfg['joints_num'])
-        joints = joints[:active_length(joints)]  # drop the trailing static tail so the
-                                                 # motion and captions end together
+        rotations = motion_to_unity_joint_rotations(raw_motion, cfg['joints_num'], cfg['kinematic_chain'])
+        n = active_length(joints)  # drop the trailing static tail so the motion and captions
+        joints = joints[:n]        # end together
+        rotations = rotations[:n]
 
         await server.broadcast({'type': 'start', 'name': name, 'fps': fps,
                                 'num_frames': len(joints), 'caption_m2t': caption})
@@ -126,6 +134,7 @@ async def run(args):
         for i in range(len(joints)):
             await server.broadcast({'type': 'frame', 'frame': i,
                                     'joints': joints[i].tolist(),
+                                    'rotations': rotations[i].tolist(),
                                     'caption_m2t': caption,
                                     'caption_m2dt': _active_snippet(timed_script, i)})
             await asyncio.sleep(frame_dt)
