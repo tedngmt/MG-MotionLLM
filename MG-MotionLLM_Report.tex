@@ -359,9 +359,10 @@ connection is treated as \code{end}, releasing control back to idle. Captions re
 or, in compare mode, \code{caption\_m2t}+\code{caption\_m2dt}, labeled ``Simple''/``Detail.''
 
 \subsection{The retarget}
-\code{updateBoneAnglesFromJoints} is why positions are streamed: Unity rebuilds each bone's rotation
-from global joint positions by aiming the bone at its child joint. Over the 22-joint map it captures
-the bind pose once in avatar-local space, then:
+The receiver supports two retargets. The \emph{position-based} one
+(\code{updateBoneAnglesFromJoints}, the default and automatic fallback) rebuilds each bone's
+rotation from the global joint positions by aiming the bone at its child joint. Over the 22-joint
+map it captures the bind pose once in avatar-local space, then:
 \begin{itemize}
   \item \textbf{Pelvis:} full orientation from the spine direction (up, Pelvis$\rightarrow$Spine1)
         and hip line (right, L\_Hip$\rightarrow$R\_Hip); positioned from \code{targets[0]}.
@@ -372,8 +373,17 @@ the bind pose once in avatar-local space, then:
   \item \textbf{Other limbs:} parent-relative swing: inherit the parent's world rotation, then
         bend only to aim at the next joint (swing-only, no relative twist).
 \end{itemize}
-Because the stream also carries each joint's global orientation (\S\ref{sec:stream}), a
-rotation-driven retarget can recover the limb axial twist that this position-based version omits.
+Aiming recovers only swing, so the spine/neck and hips above rely on hardcoded heuristics (a
+blended hip/shoulder line; a knee-pole sign) to pin the missing twist, and the other limbs stay
+swing-only. The \emph{rotation-driven} retarget (\code{updateBoneAnglesFromGlobalRotations}) instead
+poses the avatar by pure forward kinematics from the streamed global orientations
+(\S\ref{sec:stream}): only the pelvis translates, every bone is rotation-only, and children inherit
+the parent transform at their bind offsets. Each Unity bone $i$ is driven by its primary child's
+orientation $Q[\text{child}]$ (because $Q_j$ orients the segment \emph{ending} at $j$, whereas a
+Unity transform orients the segment \emph{leaving} it), which carries the per-bone axial twist
+directly from the data and so needs \emph{none} of the hardcoded twist heuristics. It is selected by
+the \code{driveByRotation} flag, with the position path as an automatic fallback when a frame lacks
+rotations.
 
 \subsection{Running it}
 The SMPL package is research-licensed and not committed (only the modified C\# scripts are tracked);
@@ -391,7 +401,9 @@ one another. Its reliance on the SMPL-based HumanML3D representation, rather tha
 file formats, is what makes motion tokenizable and benchmarkable. The accompanying pipeline turns
 generated motion and text into either offline video or a live Unity stream; the streaming design's
 key insight is to transmit convention-free joint \emph{positions} and reconstruct bone rotations on
-the Unity side by aiming each bone at its child joint.
+the Unity side by aiming each bone at its child joint, with an optional rotation-driven mode that
+poses the avatar from the streamed global joint orientations to additionally recover the per-bone
+axial twist that aiming omits.
 
 % ====================================================================
 \section*{Acknowledgments and AI Use}
