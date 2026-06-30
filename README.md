@@ -318,6 +318,14 @@ pick reproducible). Output defaults to MP4 (requires a working `ffmpeg`); pass `
 isn't available. Each clip gets its own folder: `./visualizations/{m2t,m2dt,m2t_and_m2dt}/{name}/{name}.{mp4,gif}`
 next to a `{name}.txt` with the generated (and ground-truth, where available) text.
 
+**Body-part highlighting.** `m2dt_visualize.py` and `m2t_and_m2dt_visualize.py` draw the skeleton in
+white and light up the body parts the current caption refers to in yellow, synced to the motion, so the
+fine-grained descriptions are easy to follow (and easy to sanity-check: if the highlighted part isn't the
+one moving, the caption is off). The parts are derived from the caption text by `utils/body_parts.py`
+(a keyword-to-joint mapping over the 22 HumanML3D body joints). In the side-by-side view only the
+Motion-to-Detailed-Text panel is highlighted, since the Motion-to-Text caption is a single whole-body
+description.
+
 To try the `./input/` batch path without your own motion data yet, just copy a few files over from the
 dataset, e.g.:
 ```python
@@ -406,7 +414,7 @@ generating/streaming.
 Per-frame JSON messages look like:
 ```json
 {"type": "start", "name": "000000", "fps": 20.0, "num_frames": 79, "caption": "a person kicks with their left leg."}
-{"type": "frame", "frame": 0, "joints": [[x, y, z], "...22 entries..."], "rotations": [[x, y, z, w], "...22 entries..."], "caption": "..."}
+{"type": "frame", "frame": 0, "joints": [[x, y, z], "...22 entries..."], "rotations": [[x, y, z, w], "...22 entries..."], "caption": "...", "highlight": [1, 4, 7, 10]}
 {"type": "end", "name": "000000"}
 ```
 `joints` are 22 global joint *positions* (index 0 = pelvis) ordered to match
@@ -417,6 +425,15 @@ same 22 joints' global *orientations* (Unity-frame quaternions, `x,y,z,w`); see 
 sends both models' text as `caption_m2t`/`caption_m2dt` on every frame, since there's one shared avatar to
 drive. The Unity overlay shows a single `caption` unlabeled, or both captions labeled `Simple:` (M2T) /
 `Detail:` (M2DT) when both are present.
+
+Each frame also carries `highlight`: the list of joint indices the active caption refers to, in the same
+joint order as `joints` (Pelvis=0 .. R_Wrist=21), derived from the caption text by `utils/body_parts.py`.
+The Unity `smpl_mecanim` project uses it to make those body parts glow on the avatar -- an emissive
+highlight material (`BodyPartHighlight.shader`) driven per frame by `BodyPartHighlighter.cs`, picked up by
+the Post-Processing stack's Bloom -- so you can see at a glance which part each fine-grained caption is
+describing. `m2t_and_m2dt_unity_stream.py` derives `highlight` from the Motion-to-Detailed-Text snippet
+(the Motion-to-Text caption is whole-body). Snippets with no recognizable part (e.g. `<Motionless>`) send
+an empty list, highlighting nothing.
 
 Note on positions vs. rotations: the avatar is **driven by positions**. `motion_to_unity_joints()` in
 `utils/unity_stream.py` streams joint positions (`recover_from_ric`, X-mirrored into Unity's left-handed
