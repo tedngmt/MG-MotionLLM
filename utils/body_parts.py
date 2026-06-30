@@ -62,6 +62,31 @@ _CENTRAL = {
 }
 
 
+# --- Coarse body parts, for the part-tagged Motion-to-Detailed-Text target ---------------
+#
+# The fine-grained joint map above is used to *highlight* the rendered skeleton. For
+# training MG-MotionLLM to emit which part each sentence is about, we use a coarser, fixed
+# vocabulary of six parts (the five kinematic-chain branches plus the head). Each part has a
+# special token (matching the project's existing '<...>' token convention) and the joint set
+# it lights up when highlighting.
+PART_JOINTS = {
+    'left_arm':  [13, 16, 18, 20],
+    'right_arm': [14, 17, 19, 21],
+    'left_leg':  [1, 4, 7, 10],
+    'right_leg': [2, 5, 8, 11],
+    'torso':     [0, 3, 6, 9, 12],
+    'head':      [12, 15],
+}
+PART_ORDER = ['head', 'torso', 'left_arm', 'right_arm', 'left_leg', 'right_leg']
+PART_TAGS = [f'<{p}>' for p in PART_ORDER]
+_TAG_RE = re.compile(r'<(' + '|'.join(PART_ORDER) + r')>')
+
+_TORSO_WORDS = ['body', 'torso', 'waist', 'spine', 'chest', 'pelvis']
+_ARM_WORDS = ['arm', 'forearm', 'shoulder', 'elbow', 'hand', 'wrist', 'finger']
+_LEG_WORDS = ['leg', 'thigh', 'knee', 'shin', 'calf', 'ankle', 'foot', 'toe', 'hip']
+_SENTENCE_RE = re.compile(r'(?<=[.!?])\s+')
+
+
 def _has(text, word):
     return re.search(r'\b' + word + r'\b', text) is not None
 
@@ -101,3 +126,128 @@ def caption_to_highlight_joints(text, joints_num=22):
             joints.update(sides['right'])
 
     return joints
+
+
+def caption_to_parts(text):
+    """Return the set of coarse part names (keys of PART_JOINTS) a *single sentence* is about.
+
+    Side ambiguity is resolved at the sentence level: a side-less limb word ("bend your
+    knee") inherits the only side the sentence mentions ("...your left leg..."), and falls
+    back to both sides only when the sentence names both sides or neither.
+    """
+    if not text:
+        return set()
+    text = text.lower()
+    parts = set()
+
+    if _has(text, 'head'):
+        parts.add('head')
+    if any(_has(text, w) for w in _TORSO_WORDS) or _has(text, 'neck'):
+        parts.add('torso')
+
+    has_left = _has(text, 'left')
+    has_right = _has(text, 'right')
+
+    def _assign(words, left_part, right_part):
+        plurals = [_PLURALS[w] for w in words if w in _PLURALS]
+        if any(_has(text, p) for p in plurals):
+            parts.update((left_part, right_part))
+            return
+        sided = False
+        if any(_has(text, 'left ' + w) for w in words):
+            parts.add(left_part)
+            sided = True
+        if any(_has(text, 'right ' + w) for w in words):
+            parts.add(right_part)
+            sided = True
+        if sided or not any(_has(text, w) for w in words):
+            return
+        # Bare, side-less limb word: inherit the sentence's only side if unambiguous.
+        if has_left and not has_right:
+            parts.add(left_part)
+        elif has_right and not has_left:
+            parts.add(right_part)
+        else:
+            parts.update((left_part, right_part))
+
+    _assign(_ARM_WORDS, 'left_arm', 'right_arm')
+    _assign(_LEG_WORDS, 'left_leg', 'right_leg')
+    return parts
+
+
+def tag_snippet(snippet):
+    """Prefix every sentence of a 0.5s snippet with the body-part tag(s) it describes.
+
+    "Move your hands closer together. Turn your head to the right."
+        -> "<left_arm><right_arm> Move your hands closer together. <head> Turn your head to the right."
+
+    Snippets with no recognisable part (e.g. "<Motionless>", "Look forward.") are returned
+    unchanged, so the tags only ever mark sentences we can confidently attribute.
+    """
+    if not snippet or snippet == '<Motionless>':
+        return snippet
+    out = []
+    for sentence in _SENTENCE_RE.split(snippet.strip()):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        parts = caption_to_parts(sentence)
+        tags = ''.join(f'<{p}>' for p in PART_ORDER if p in parts)
+        out.append(f'{tags} {sentence}' if tags else sentence)
+    return ' '.join(out)
+
+
+def parse_tagged_text(text):
+    """Split a part-tagged snippet into (parts, sentence) pairs.
+
+    Inverse of tag_snippet: reads the inline '<part>' tokens back out, returning a list of
+    (set_of_part_names, sentence_text) for each tagged sentence. Used at inference time to
+    drive highlighting straight from the model's own tags instead of re-guessing from text.
+    """
+    segments = []
+    matches = list(_TAG_RE.finditer(text))
+    if not matches:
+        return segments
+    # Group consecutive tags, then take the text up to the next tag group as their sentence.
+    i = 0
+    while i < len(matches):
+        parts = {matches[i].group(1)}
+        j = i + 1
+        while j < len(matches) and matches[j].start() == matches[j - 1].end():
+            parts.add(matches[j].group(1))
+            j += 1
+        text_start = matches[j - 1].end()
+        text_end = matches[j].start() if j < len(matches) else len(text)
+        segments.append((parts, text[text_start:text_end].strip()))
+        i = j
+    return segments
+
+
+def strip_tags(text):
+    """Remove inline '<part>' tokens, collapsing the leftover whitespace."""
+    return re.sub(r'\s{2,}', ' ', _TAG_RE.sub('', text)).strip()
+
+
+def parts_to_joints(parts, joints_num=22):
+    """Union the joint indices of the given coarse part names (empty for non-22-joint skeletons)."""
+    if joints_num != 22:
+        return set()
+    joints = set()
+    for p in parts:
+        joints.update(PART_JOINTS.get(p, []))
+    return joints
+
+
+def snippet_to_display_and_joints(snippet, joints_num=22):
+    """Return (clean_caption, highlight_joints) for one M2DT snippet.
+
+    If the snippet carries inline '<part>' tags (a model trained with --use_part_tags), the
+    highlight comes straight from those tags and the caption is shown with the tags stripped.
+    Otherwise we fall back to keyword-mapping the raw text, so untagged checkpoints still
+    highlight as before.
+    """
+    segments = parse_tagged_text(snippet)
+    if segments:
+        parts = set().union(*(parts for parts, _ in segments))
+        return strip_tags(snippet), parts_to_joints(parts, joints_num)
+    return snippet, caption_to_highlight_joints(snippet, joints_num)

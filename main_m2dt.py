@@ -12,6 +12,7 @@ from transformers import (
     Seq2SeqTrainingArguments, Seq2SeqTrainer
 )
 from utils.instruction_templates import m2dt_template_list
+from utils.body_parts import PART_TAGS
 
 
 # Set random seeds and deterministic pytorch for reproducibility
@@ -22,7 +23,7 @@ def set_seed(seed=42):
 
 
 # Load model and tokenizer
-def load_model_and_tokenizer(model_name="google-t5/t5-base"):
+def load_model_and_tokenizer(model_name="google-t5/t5-base", use_part_tags=False):
     if 'google-t5' in model_name:
         tokenizer = T5Tokenizer.from_pretrained(model_name)
         model = T5ForConditionalGeneration.from_pretrained(model_name, device_map="auto")
@@ -30,6 +31,10 @@ def load_model_and_tokenizer(model_name="google-t5/t5-base"):
         # Add special tokens
         new_tokens = ['<' + str(i) + '>' for i in range(512)]
         new_tokens.extend(['<Motion Tokens>', '</Motion Tokens>', '<Motionless>', '<SEP>'])
+        # Body-part tags only when training on the tagged targets, so the default path keeps
+        # the original vocabulary.
+        if use_part_tags:
+            new_tokens.extend(PART_TAGS)
         tokenizer.add_tokens(new_tokens)
         model.resize_token_embeddings(len(tokenizer))
     else:
@@ -42,7 +47,8 @@ def load_model_and_tokenizer(model_name="google-t5/t5-base"):
 
 # 3. load data
 class M2DTDataset(Dataset):
-    def __init__(self, tokenizer, split='train', source_len=256, target_len=1536, unit_length=4):
+    def __init__(self, tokenizer, split='train', source_len=256, target_len=1536, unit_length=4,
+                 use_part_tags=False):
         # t2m
         self.data_root = './dataset/HumanML3D'
         self.text_dir = pjoin(self.data_root, 'texts')
@@ -58,12 +64,15 @@ class M2DTDataset(Dataset):
         self.source_len = source_len
         self.target_len = target_len
 
-        # detailed text for motions
-        BPMSD_auto_file = pjoin(self.finemotion_text_dir, 'BPMSD_auto.json')
+        # detailed text for motions; with --use_part_tags, load the body-part-tagged targets
+        # (same {name: [snippet, ...]} layout) so the model learns to emit which part each
+        # sentence is about. Build them first with prepare/build_tagged_bpmsd.py.
+        suffix = '_tagged' if use_part_tags else ''
+        BPMSD_auto_file = pjoin(self.finemotion_text_dir, f'BPMSD_auto{suffix}.json')
         with open(BPMSD_auto_file, 'r') as f:
             BPMSD_dict = json.load(f)
 
-        BPMSD_human_file = pjoin(self.finemotion_text_dir, 'BPMSD_human.json')
+        BPMSD_human_file = pjoin(self.finemotion_text_dir, f'BPMSD_human{suffix}.json')
         with open(BPMSD_human_file, 'r') as f:
             BPMSD_human_dict = json.load(f)
         BPMSD_dict.update(BPMSD_human_dict)
@@ -230,18 +239,20 @@ if __name__ == "__main__":
     parser.add_argument("--save_total_limit", type=int, default=3, help="Checkpoint save interval")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--use_part_tags", action="store_true",
+                        help="Train on body-part-tagged BPMSD targets (run prepare/build_tagged_bpmsd.py first)")
     args = parser.parse_args()
 
     # set seed
     set_seed(args.seed)
 
     # load model and tokenizer
-    tokenizer, model = load_model_and_tokenizer(args.model_name)
+    tokenizer, model = load_model_and_tokenizer(args.model_name, use_part_tags=args.use_part_tags)
 
     # load dataset
     print("[Data]: Loading datasets...")
-    train_dataset = M2DTDataset(tokenizer, split='train')
-    val_dataset = M2DTDataset(tokenizer, split='val')
+    train_dataset = M2DTDataset(tokenizer, split='train', use_part_tags=args.use_part_tags)
+    val_dataset = M2DTDataset(tokenizer, split='val', use_part_tags=args.use_part_tags)
 
     data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
 

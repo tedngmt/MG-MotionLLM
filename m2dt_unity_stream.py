@@ -9,8 +9,13 @@ client to ws://<this machine>:<--port> (default 8765).
 Per-frame JSON message schema:
     {"type": "start", "name": str, "fps": float, "num_frames": int}
     {"type": "frame", "frame": int, "joints": [[x,y,z] x 22],
-                      "rotations": [[x,y,z,w] x 22], "caption": str}
+                      "rotations": [[x,y,z,w] x 22], "caption": str, "highlight": [int, ...]}
     {"type": "end", "name": str}
+"highlight" is the list of joint indices the active caption refers to, in the same joint
+order as "joints"/"rotations" (UNITY_JOINT_NAMES, Pelvis=0 .. R_Wrist=21). Tint those bones
+on the Unity side (e.g. yellow) and leave the rest at their default colour so the body parts
+the caption is describing stand out. The indices are derived from the caption text via
+utils.body_parts.caption_to_highlight_joints.
 "joints" are global joint positions (Unity space, index 0 = pelvis) ordered to match
 SMPLModifyBones._boneNameToJointIndex (Pelvis=0 .. R_Wrist=21, see
 utils/unity_stream.UNITY_JOINT_NAMES) -- feed straight into
@@ -41,15 +46,16 @@ from utils.inference_utils import (
     DATASET_CONFIG, resolve_samples, load_vqvae, motion_to_token_string, generate_text,
     load_gt_detail, parse_motion_script, sample_output_dir,
 )
+from utils.body_parts import caption_to_highlight_joints
 
 SNIPPET_SECONDS = 0.5  # FineMotion body-part descriptions are aligned to 0.5s chunks.
 
 
-def _active_snippet(timed_captions, frame_idx):
-    for start, end, text in timed_captions:
+def _active(timed, frame_idx, default):
+    for start, end, value in timed:
         if start <= frame_idx < end:
-            return text
-    return ''
+            return value
+    return default
 
 
 async def run(args):
@@ -103,6 +109,11 @@ async def run(args):
             (i * frames_per_snippet, min((i + 1) * frames_per_snippet, m_length), text)
             for i, text in enumerate(snippets)
         ]
+        # Joint indices each snippet refers to, for highlighting the matching bones in Unity.
+        timed_highlights = [
+            (start, end, sorted(caption_to_highlight_joints(text, cfg['joints_num'])))
+            for start, end, text in timed_captions
+        ]
 
         joints = motion_to_unity_joints(raw_motion, cfg['joints_num'])
         rotations = motion_to_unity_joint_rotations(raw_motion, cfg['joints_num'], cfg['kinematic_chain'])
@@ -116,7 +127,8 @@ async def run(args):
             await server.broadcast({'type': 'frame', 'frame': i,
                                     'joints': joints[i].tolist(),
                                     'rotations': rotations[i].tolist(),
-                                    'caption': _active_snippet(timed_captions, i)})
+                                    'caption': _active(timed_captions, i, ''),
+                                    'highlight': _active(timed_highlights, i, [])})
             await asyncio.sleep(frame_dt)
         await server.broadcast({'type': 'end', 'name': name})
 

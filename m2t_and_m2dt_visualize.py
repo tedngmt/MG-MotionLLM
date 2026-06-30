@@ -21,7 +21,7 @@ from transformers import T5Tokenizer, T5ForConditionalGeneration
 from options import option
 from utils.motion_process import recover_from_ric
 from utils.plot_script import plot_3d_motion_compare
-from utils.body_parts import caption_to_highlight_joints
+from utils.body_parts import snippet_to_display_and_joints
 from utils.inference_utils import (
     DATASET_CONFIG, resolve_samples, load_vqvae, motion_to_token_string, generate_text,
     load_gt_caption, load_gt_detail, parse_motion_script, sample_output_dir,
@@ -109,16 +109,16 @@ if __name__ == '__main__':
         if gt_snippets:
             print(f'[M2DT GT]        {" <SEP> ".join(gt_snippets)}')
 
-        timed_script = [
-            (i * frames_per_snippet, min((i + 1) * frames_per_snippet, m_length), text)
-            for i, text in enumerate(snippets)
-        ]
         # Highlight the body parts each M2DT snippet describes (right panel only; the M2T
-        # caption on the left is a single whole-body description).
-        timed_highlights = [
-            (start, end, caption_to_highlight_joints(text, cfg['joints_num']))
-            for start, end, text in timed_script
-        ]
+        # caption on the left is a single whole-body description). Tags from a --use_part_tags
+        # model drive the highlight directly; otherwise the raw text is keyword-mapped.
+        timed_script, timed_highlights = [], []
+        for i, snippet in enumerate(snippets):
+            start = i * frames_per_snippet
+            end = min((i + 1) * frames_per_snippet, m_length)
+            text, joints_hl = snippet_to_display_and_joints(snippet, cfg['joints_num'])
+            timed_script.append((start, end, text))
+            timed_highlights.append((start, end, joints_hl))
 
         joints = recover_from_ric(torch.from_numpy(raw_motion).float(), cfg['joints_num']).numpy()
 

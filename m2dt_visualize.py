@@ -26,7 +26,7 @@ from transformers import T5Tokenizer, T5ForConditionalGeneration
 from options import option
 from utils.motion_process import recover_from_ric
 from utils.plot_script import plot_3d_motion
-from utils.body_parts import caption_to_highlight_joints
+from utils.body_parts import snippet_to_display_and_joints
 from utils.inference_utils import (
     DATASET_CONFIG, resolve_samples, load_vqvae, motion_to_token_string, generate_text,
     load_gt_detail, parse_motion_script, sample_output_dir,
@@ -98,15 +98,16 @@ if __name__ == '__main__':
         if gt_snippets:
             print(f'[GT script]        {" <SEP> ".join(gt_snippets)}')
 
-        timed_captions = [
-            (i * frames_per_snippet, min((i + 1) * frames_per_snippet, m_length), text)
-            for i, text in enumerate(snippets)
-        ]
-        # Highlight the body parts each snippet describes, in sync with the caption.
-        timed_highlights = [
-            (start, end, caption_to_highlight_joints(text, cfg['joints_num']))
-            for start, end, text in timed_captions
-        ]
+        # Highlight the body parts each snippet describes, in sync with the caption. If the
+        # model emits inline <part> tags (--use_part_tags), highlight from those and show the
+        # caption with tags stripped; otherwise keyword-map the raw text.
+        timed_captions, timed_highlights = [], []
+        for i, snippet in enumerate(snippets):
+            start = i * frames_per_snippet
+            end = min((i + 1) * frames_per_snippet, m_length)
+            text, joints_hl = snippet_to_display_and_joints(snippet, cfg['joints_num'])
+            timed_captions.append((start, end, text))
+            timed_highlights.append((start, end, joints_hl))
 
         joints = recover_from_ric(torch.from_numpy(raw_motion).float(), cfg['joints_num']).numpy()
 
