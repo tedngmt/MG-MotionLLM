@@ -26,6 +26,7 @@ from transformers import T5Tokenizer, T5ForConditionalGeneration
 from options import option
 from utils.motion_process import recover_from_ric
 from utils.plot_script import plot_3d_motion
+from utils.body_parts import caption_to_highlight_joints
 from utils.inference_utils import (
     DATASET_CONFIG, resolve_samples, load_vqvae, motion_to_token_string, generate_text,
     load_gt_detail, parse_motion_script, sample_output_dir,
@@ -101,6 +102,11 @@ if __name__ == '__main__':
             (i * frames_per_snippet, min((i + 1) * frames_per_snippet, m_length), text)
             for i, text in enumerate(snippets)
         ]
+        # Highlight the body parts each snippet describes, in sync with the caption.
+        timed_highlights = [
+            (start, end, caption_to_highlight_joints(text, cfg['joints_num']))
+            for start, end, text in timed_captions
+        ]
 
         joints = recover_from_ric(torch.from_numpy(raw_motion).float(), cfg['joints_num']).numpy()
 
@@ -109,7 +115,7 @@ if __name__ == '__main__':
         save_path = os.path.join(sample_dir, f'{name}.{args.format}')
         plot_3d_motion(save_path, cfg['kinematic_chain'], joints,
                        captions=timed_captions, title=f'Sample: {name}',
-                       fps=fps, radius=args.radius)
+                       fps=fps, radius=args.radius, highlights=timed_highlights)
 
         script_path = os.path.join(sample_dir, f'{name}.txt')
         with open(script_path, 'w', encoding='utf-8') as f:

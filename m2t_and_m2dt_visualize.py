@@ -21,6 +21,7 @@ from transformers import T5Tokenizer, T5ForConditionalGeneration
 from options import option
 from utils.motion_process import recover_from_ric
 from utils.plot_script import plot_3d_motion_compare
+from utils.body_parts import caption_to_highlight_joints
 from utils.inference_utils import (
     DATASET_CONFIG, resolve_samples, load_vqvae, motion_to_token_string, generate_text,
     load_gt_caption, load_gt_detail, parse_motion_script, sample_output_dir,
@@ -112,6 +113,12 @@ if __name__ == '__main__':
             (i * frames_per_snippet, min((i + 1) * frames_per_snippet, m_length), text)
             for i, text in enumerate(snippets)
         ]
+        # Highlight the body parts each M2DT snippet describes (right panel only; the M2T
+        # caption on the left is a single whole-body description).
+        timed_highlights = [
+            (start, end, caption_to_highlight_joints(text, cfg['joints_num']))
+            for start, end, text in timed_script
+        ]
 
         joints = recover_from_ric(torch.from_numpy(raw_motion).float(), cfg['joints_num']).numpy()
 
@@ -121,7 +128,8 @@ if __name__ == '__main__':
         plot_3d_motion_compare(save_path, cfg['kinematic_chain'], joints,
                                captions_left=caption, captions_right=timed_script,
                                label_left='Motion-to-Text', label_right='Motion-to-Detailed-Text',
-                               title=f'Sample: {name}', fps=fps, radius=args.radius)
+                               title=f'Sample: {name}', fps=fps, radius=args.radius,
+                               highlights_right=timed_highlights)
 
         script_path = os.path.join(sample_dir, f'{name}.txt')
         with open(script_path, 'w', encoding='utf-8') as f:
